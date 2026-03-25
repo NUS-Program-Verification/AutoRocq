@@ -1,0 +1,3 @@
+[submodule "AutoRocq-bench"]
+	path = AutoRocq-bench
+	url = https://github.com/NUS-Program-Verification/AutoRocq-bench

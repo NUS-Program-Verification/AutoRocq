@@ -1,0 +1,597 @@
+Require Import BuiltIn.
+Require BuiltIn.
+Require HighOrd.
+Require bool.Bool.
+Require int.Int.
+Require int.Abs.
+Require int.ComputerDivision.
+Require real.Real.
+Require real.RealInfix.
+Require real.FromInt.
+Require map.Map.
+
+Parameter eqb:
+  forall {a:Type} {a_WT:WhyType a}, a -> a -> Init.Datatypes.bool.
+
+Axiom eqb'def :
+  forall {a:Type} {a_WT:WhyType a},
+  forall (x:a) (y:a),
+  ((x = y) -> ((eqb x y) = Init.Datatypes.true)) /\
+  (~ (x = y) -> ((eqb x y) = Init.Datatypes.false)).
+
+Parameter neqb:
+  forall {a:Type} {a_WT:WhyType a}, a -> a -> Init.Datatypes.bool.
+
+Axiom neqb'def :
+  forall {a:Type} {a_WT:WhyType a},
+  forall (x:a) (y:a),
+  (~ (x = y) -> ((neqb x y) = Init.Datatypes.true)) /\
+  ((x = y) -> ((neqb x y) = Init.Datatypes.false)).
+
+Parameter zlt: Numbers.BinNums.Z -> Numbers.BinNums.Z -> Init.Datatypes.bool.
+
+Axiom zlt'def :
+  forall (x:Numbers.BinNums.Z) (y:Numbers.BinNums.Z),
+  ((x < y)%Z -> ((zlt x y) = Init.Datatypes.true)) /\
+  (~ (x < y)%Z -> ((zlt x y) = Init.Datatypes.false)).
+
+Parameter zleq:
+  Numbers.BinNums.Z -> Numbers.BinNums.Z -> Init.Datatypes.bool.
+
+Axiom zleq'def :
+  forall (x:Numbers.BinNums.Z) (y:Numbers.BinNums.Z),
+  ((x <= y)%Z -> ((zleq x y) = Init.Datatypes.true)) /\
+  (~ (x <= y)%Z -> ((zleq x y) = Init.Datatypes.false)).
+
+Parameter rlt:
+  Reals.Rdefinitions.R -> Reals.Rdefinitions.R -> Init.Datatypes.bool.
+
+Axiom rlt'def :
+  forall (x:Reals.Rdefinitions.R) (y:Reals.Rdefinitions.R),
+  ((x < y)%R -> ((rlt x y) = Init.Datatypes.true)) /\
+  (~ (x < y)%R -> ((rlt x y) = Init.Datatypes.false)).
+
+Parameter rleq:
+  Reals.Rdefinitions.R -> Reals.Rdefinitions.R -> Init.Datatypes.bool.
+
+Axiom rleq'def :
+  forall (x:Reals.Rdefinitions.R) (y:Reals.Rdefinitions.R),
+  ((x <= y)%R -> ((rleq x y) = Init.Datatypes.true)) /\
+  (~ (x <= y)%R -> ((rleq x y) = Init.Datatypes.false)).
+
+(* Why3 assumption *)
+Definition real_of_int (x:Numbers.BinNums.Z) : Reals.Rdefinitions.R :=
+  BuiltIn.IZR x.
+
+Axiom c_euclidian :
+  forall (n:Numbers.BinNums.Z) (d:Numbers.BinNums.Z), ~ (d = 0%Z) ->
+  (n = (((ZArith.BinInt.Z.quot n d) * d)%Z + (ZArith.BinInt.Z.rem n d))%Z).
+
+Axiom cmod_remainder :
+  forall (n:Numbers.BinNums.Z) (d:Numbers.BinNums.Z),
+  ((0%Z <= n)%Z -> (0%Z < d)%Z ->
+   (0%Z <= (ZArith.BinInt.Z.rem n d))%Z /\ ((ZArith.BinInt.Z.rem n d) < d)%Z) /\
+  ((n <= 0%Z)%Z -> (0%Z < d)%Z ->
+   ((-d)%Z < (ZArith.BinInt.Z.rem n d))%Z /\
+   ((ZArith.BinInt.Z.rem n d) <= 0%Z)%Z) /\
+  ((0%Z <= n)%Z -> (d < 0%Z)%Z ->
+   (0%Z <= (ZArith.BinInt.Z.rem n d))%Z /\
+   ((ZArith.BinInt.Z.rem n d) < (-d)%Z)%Z) /\
+  ((n <= 0%Z)%Z -> (d < 0%Z)%Z ->
+   (d < (ZArith.BinInt.Z.rem n d))%Z /\ ((ZArith.BinInt.Z.rem n d) <= 0%Z)%Z).
+
+Axiom cdiv_neutral :
+  forall (a:Numbers.BinNums.Z), ((ZArith.BinInt.Z.quot a 1%Z) = a).
+
+Axiom cdiv_inv :
+  forall (a:Numbers.BinNums.Z), ~ (a = 0%Z) ->
+  ((ZArith.BinInt.Z.quot a a) = 1%Z).
+
+Axiom cdiv_closed_remainder :
+  forall (a:Numbers.BinNums.Z) (b:Numbers.BinNums.Z) (n:Numbers.BinNums.Z),
+  (0%Z <= a)%Z -> (0%Z <= b)%Z ->
+  (0%Z <= (b - a)%Z)%Z /\ ((b - a)%Z < n)%Z ->
+  ((ZArith.BinInt.Z.rem a n) = (ZArith.BinInt.Z.rem b n)) -> (a = b).
+
+(* Why3 assumption *)
+Inductive addr :=
+  | addr'mk : Numbers.BinNums.Z -> Numbers.BinNums.Z -> addr.
+Axiom addr_WhyType : WhyType addr.
+Existing Instance addr_WhyType.
+
+(* Why3 assumption *)
+Definition base (v:addr) : Numbers.BinNums.Z :=
+  match v with
+  | addr'mk x x1 => x
+  end.
+
+(* Why3 assumption *)
+Definition offset (v:addr) : Numbers.BinNums.Z :=
+  match v with
+  | addr'mk x x1 => x1
+  end.
+
+(* Why3 assumption *)
+Definition malloc := Numbers.BinNums.Z -> Numbers.BinNums.Z.
+
+(* Why3 assumption *)
+Definition null : addr := addr'mk 0%Z 0%Z.
+
+(* Why3 assumption *)
+Definition global (b:Numbers.BinNums.Z) : addr := addr'mk b 0%Z.
+
+Parameter addr_le: addr -> addr -> Prop.
+
+Parameter addr_lt: addr -> addr -> Prop.
+
+Parameter addr_le_bool: addr -> addr -> Init.Datatypes.bool.
+
+Parameter addr_lt_bool: addr -> addr -> Init.Datatypes.bool.
+
+Axiom addr_le_def :
+  forall (p:addr) (q:addr), ((base p) = (base q)) ->
+  addr_le p q <-> ((offset p) <= (offset q))%Z.
+
+Axiom addr_lt_def :
+  forall (p:addr) (q:addr), ((base p) = (base q)) ->
+  addr_lt p q <-> ((offset p) < (offset q))%Z.
+
+Axiom addr_le_bool_def :
+  forall (p:addr) (q:addr),
+  addr_le p q <-> ((addr_le_bool p q) = Init.Datatypes.true).
+
+Axiom addr_lt_bool_def :
+  forall (p:addr) (q:addr),
+  addr_lt p q <-> ((addr_lt_bool p q) = Init.Datatypes.true).
+
+(* Why3 assumption *)
+Definition shift (p:addr) (k:Numbers.BinNums.Z) : addr :=
+  addr'mk (base p) ((offset p) + k)%Z.
+
+(* Why3 assumption *)
+Definition valid_rw (m:Numbers.BinNums.Z -> Numbers.BinNums.Z) (p:addr)
+    (n:Numbers.BinNums.Z) : Prop :=
+  (0%Z < n)%Z ->
+  (0%Z < (base p))%Z /\
+  (0%Z <= (offset p))%Z /\ (((offset p) + n)%Z <= (m (base p)))%Z.
+
+(* Why3 assumption *)
+Definition valid_rd (m:Numbers.BinNums.Z -> Numbers.BinNums.Z) (p:addr)
+    (n:Numbers.BinNums.Z) : Prop :=
+  (0%Z < n)%Z ->
+  ~ (0%Z = (base p)) /\
+  (0%Z <= (offset p))%Z /\ (((offset p) + n)%Z <= (m (base p)))%Z.
+
+(* Why3 assumption *)
+Definition valid_obj (m:Numbers.BinNums.Z -> Numbers.BinNums.Z) (p:addr) :
+    Prop :=
+  (p = null) \/
+  ~ (0%Z = (base p)) /\
+  (0%Z <= (offset p))%Z /\
+  ((offset p) <= (m (base p)))%Z /\ (0%Z < (m (base p)))%Z.
+
+(* Why3 assumption *)
+Definition invalid (m:Numbers.BinNums.Z -> Numbers.BinNums.Z) (p:addr)
+    (n:Numbers.BinNums.Z) : Prop :=
+  (n <= 0%Z)%Z \/
+  ((base p) = 0%Z) \/
+  ((m (base p)) <= (offset p))%Z \/ (((offset p) + n)%Z <= 0%Z)%Z.
+
+Axiom valid_rw_rd :
+  forall (m:Numbers.BinNums.Z -> Numbers.BinNums.Z), forall (p:addr),
+  forall (n:Numbers.BinNums.Z), valid_rw m p n -> valid_rd m p n.
+
+Axiom valid_string :
+  forall (m:Numbers.BinNums.Z -> Numbers.BinNums.Z), forall (p:addr),
+  ((base p) < 0%Z)%Z ->
+  (0%Z <= (offset p))%Z /\ ((offset p) < (m (base p)))%Z ->
+  valid_rd m p 1%Z /\ ~ valid_rw m p 1%Z.
+
+(* Why3 assumption *)
+Definition included (p:addr) (lp:Numbers.BinNums.Z) (q:addr)
+    (lq:Numbers.BinNums.Z) : Prop :=
+  (0%Z < lp)%Z ->
+  (0%Z <= lq)%Z /\
+  ((base p) = (base q)) /\
+  ((offset q) <= (offset p))%Z /\
+  (((offset p) + lp)%Z <= ((offset q) + lq)%Z)%Z.
+
+(* Why3 assumption *)
+Definition separated (p:addr) (lp:Numbers.BinNums.Z) (q:addr)
+    (lq:Numbers.BinNums.Z) : Prop :=
+  (lp <= 0%Z)%Z \/
+  (lq <= 0%Z)%Z \/
+  ~ ((base p) = (base q)) \/
+  (((offset q) + lq)%Z <= (offset p))%Z \/
+  (((offset p) + lp)%Z <= (offset q))%Z.
+
+Axiom separated_1 :
+  forall (p:addr) (q:addr),
+  forall (lp:Numbers.BinNums.Z) (lq:Numbers.BinNums.Z) (i:Numbers.BinNums.Z)
+    (j:Numbers.BinNums.Z),
+  separated p lp q lq ->
+  ((offset p) <= i)%Z /\ (i < ((offset p) + lp)%Z)%Z ->
+  ((offset q) <= j)%Z /\ (j < ((offset q) + lq)%Z)%Z ->
+  ~ ((addr'mk (base p) i) = (addr'mk (base q) j)).
+
+Axiom separated_included :
+  forall (p:addr) (q:addr),
+  forall (lp:Numbers.BinNums.Z) (lq:Numbers.BinNums.Z), (0%Z < lp)%Z ->
+  (0%Z < lq)%Z -> separated p lp q lq -> ~ included p lp q lq.
+
+Axiom included_trans :
+  forall (p:addr) (q:addr) (r:addr),
+  forall (lp:Numbers.BinNums.Z) (lq:Numbers.BinNums.Z) (lr:Numbers.BinNums.Z),
+  included p lp q lq -> included q lq r lr -> included p lp r lr.
+
+Axiom separated_trans :
+  forall (p:addr) (q:addr) (r:addr),
+  forall (lp:Numbers.BinNums.Z) (lq:Numbers.BinNums.Z) (lr:Numbers.BinNums.Z),
+  included p lp q lq -> separated q lq r lr -> separated p lp r lr.
+
+Axiom separated_sym :
+  forall (p:addr) (q:addr),
+  forall (lp:Numbers.BinNums.Z) (lq:Numbers.BinNums.Z),
+  separated p lp q lq <-> separated q lq p lp.
+
+Parameter region: Numbers.BinNums.Z -> Numbers.BinNums.Z.
+
+Parameter linked: (Numbers.BinNums.Z -> Numbers.BinNums.Z) -> Prop.
+
+Parameter static_malloc: Numbers.BinNums.Z -> Numbers.BinNums.Z.
+
+(* Why3 assumption *)
+Definition statically_allocated (base1:Numbers.BinNums.Z) : Prop :=
+  (base1 = 0%Z) \/ (0%Z < (static_malloc base1))%Z.
+
+Axiom valid_pointers_are_statically_allocated :
+  forall (a:addr) (m:Numbers.BinNums.Z -> Numbers.BinNums.Z)
+    (n:Numbers.BinNums.Z),
+  (0%Z < n)%Z -> valid_rd m a n -> statically_allocated (base a).
+
+Parameter int_of_addr: addr -> Numbers.BinNums.Z.
+
+Parameter addr_of_int: Numbers.BinNums.Z -> addr.
+
+Axiom addr_of_null : ((int_of_addr null) = 0%Z).
+
+Axiom addr_of_int_bijection :
+  forall (p:addr), statically_allocated (base p) ->
+  ((addr_of_int (int_of_addr p)) = p).
+
+Axiom table : Type.
+Parameter table_WhyType : WhyType table.
+Existing Instance table_WhyType.
+
+Parameter table_of_base: Numbers.BinNums.Z -> table.
+
+Parameter table_to_offset: table -> Numbers.BinNums.Z -> Numbers.BinNums.Z.
+
+Axiom table_to_offset_zero :
+  forall (t:table), ((table_to_offset t 0%Z) = 0%Z).
+
+Axiom table_to_offset_monotonic :
+  forall (t:table), forall (o1:Numbers.BinNums.Z) (o2:Numbers.BinNums.Z),
+  (o1 <= o2)%Z <-> ((table_to_offset t o1) <= (table_to_offset t o2))%Z.
+
+Parameter sconst: (addr -> Numbers.BinNums.Z) -> Prop.
+
+(* Why3 assumption *)
+Definition framed (m:addr -> addr) : Prop :=
+  forall (p:addr), ((region (base p)) <= 0%Z)%Z ->
+  ((region (base (m p))) <= 0%Z)%Z.
+
+(* Why3 assumption *)
+Definition eqmem {a:Type} {a_WT:WhyType a} (m1:addr -> a) (m2:addr -> a)
+    (p:addr) (a1:Numbers.BinNums.Z) : Prop :=
+  forall (q:addr), included q 1%Z p a1 -> ((m1 q) = (m2 q)).
+
+Parameter havoc:
+  forall {a:Type} {a_WT:WhyType a}, (addr -> a) -> (addr -> a) -> addr ->
+  Numbers.BinNums.Z -> addr -> a.
+
+Axiom eqmem_included :
+  forall {a:Type} {a_WT:WhyType a},
+  forall (m1:addr -> a) (m2:addr -> a), forall (p:addr) (q:addr),
+  forall (a1:Numbers.BinNums.Z) (b:Numbers.BinNums.Z), included p a1 q b ->
+  eqmem m1 m2 q b -> eqmem m1 m2 p a1.
+
+Axiom eqmem_sym :
+  forall {a:Type} {a_WT:WhyType a},
+  forall (m1:addr -> a) (m2:addr -> a), forall (p:addr),
+  forall (a1:Numbers.BinNums.Z), eqmem m1 m2 p a1 -> eqmem m2 m1 p a1.
+
+Axiom havoc_access :
+  forall {a:Type} {a_WT:WhyType a},
+  forall (m0:addr -> a) (m1:addr -> a), forall (q:addr) (p:addr),
+  forall (a1:Numbers.BinNums.Z),
+  (separated q 1%Z p a1 -> ((havoc m0 m1 p a1 q) = (m1 q))) /\
+  (~ separated q 1%Z p a1 -> ((havoc m0 m1 p a1 q) = (m0 q))).
+
+Parameter cinits: (addr -> Init.Datatypes.bool) -> Prop.
+
+(* Why3 assumption *)
+Definition is_init_range (m:addr -> Init.Datatypes.bool) (p:addr)
+    (l:Numbers.BinNums.Z) : Prop :=
+  forall (i:Numbers.BinNums.Z), (0%Z <= i)%Z /\ (i < l)%Z ->
+  ((m (shift p i)) = Init.Datatypes.true).
+
+Parameter set_init:
+  (addr -> Init.Datatypes.bool) -> addr -> Numbers.BinNums.Z ->
+  addr -> Init.Datatypes.bool.
+
+Axiom set_init_access :
+  forall (m:addr -> Init.Datatypes.bool), forall (q:addr) (p:addr),
+  forall (a:Numbers.BinNums.Z),
+  (separated q 1%Z p a -> ((set_init m p a q) = (m q))) /\
+  (~ separated q 1%Z p a -> ((set_init m p a q) = Init.Datatypes.true)).
+
+(* Why3 assumption *)
+Definition monotonic_init (m1:addr -> Init.Datatypes.bool)
+    (m2:addr -> Init.Datatypes.bool) : Prop :=
+  forall (p:addr), ((m1 p) = Init.Datatypes.true) ->
+  ((m2 p) = Init.Datatypes.true).
+
+(* Why3 assumption *)
+Definition is_bool (x:Numbers.BinNums.Z) : Prop := (x = 0%Z) \/ (x = 1%Z).
+
+(* Why3 assumption *)
+Definition is_uint8 (x:Numbers.BinNums.Z) : Prop :=
+  (0%Z <= x)%Z /\ (x < 256%Z)%Z.
+
+(* Why3 assumption *)
+Definition is_sint8 (x:Numbers.BinNums.Z) : Prop :=
+  ((-128%Z)%Z <= x)%Z /\ (x < 128%Z)%Z.
+
+(* Why3 assumption *)
+Definition is_uint16 (x:Numbers.BinNums.Z) : Prop :=
+  (0%Z <= x)%Z /\ (x < 65536%Z)%Z.
+
+(* Why3 assumption *)
+Definition is_sint16 (x:Numbers.BinNums.Z) : Prop :=
+  ((-32768%Z)%Z <= x)%Z /\ (x < 32768%Z)%Z.
+
+(* Why3 assumption *)
+Definition is_uint32 (x:Numbers.BinNums.Z) : Prop :=
+  (0%Z <= x)%Z /\ (x < 4294967296%Z)%Z.
+
+(* Why3 assumption *)
+Definition is_sint32 (x:Numbers.BinNums.Z) : Prop :=
+  ((-2147483648%Z)%Z <= x)%Z /\ (x < 2147483648%Z)%Z.
+
+(* Why3 assumption *)
+Definition is_uint64 (x:Numbers.BinNums.Z) : Prop :=
+  (0%Z <= x)%Z /\ (x < 18446744073709551616%Z)%Z.
+
+(* Why3 assumption *)
+Definition is_sint64 (x:Numbers.BinNums.Z) : Prop :=
+  ((-9223372036854775808%Z)%Z <= x)%Z /\ (x < 9223372036854775808%Z)%Z.
+
+Axiom is_bool0 : is_bool 0%Z.
+
+Axiom is_bool1 : is_bool 1%Z.
+
+Parameter to_bool: Numbers.BinNums.Z -> Numbers.BinNums.Z.
+
+Axiom to_bool'def :
+  forall (x:Numbers.BinNums.Z),
+  ((x = 0%Z) -> ((to_bool x) = 0%Z)) /\ (~ (x = 0%Z) -> ((to_bool x) = 1%Z)).
+
+Parameter to_uint8: Numbers.BinNums.Z -> Numbers.BinNums.Z.
+
+Axiom to_uint8'def :
+  forall (x:Numbers.BinNums.Z),
+  ((x < 0%Z)%Z -> ((to_uint8 x) = (to_uint8 (x + 256%Z)%Z))) /\
+  (~ (x < 0%Z)%Z ->
+   ((256%Z <= x)%Z -> ((to_uint8 x) = (to_uint8 (x - 256%Z)%Z))) /\
+   (~ (256%Z <= x)%Z -> ((to_uint8 x) = x))).
+
+Parameter to_sint8: Numbers.BinNums.Z -> Numbers.BinNums.Z.
+
+Axiom to_sint8'def :
+  forall (x:Numbers.BinNums.Z),
+  ((x < (-128%Z)%Z)%Z -> ((to_sint8 x) = (to_sint8 (x + 256%Z)%Z))) /\
+  (~ (x < (-128%Z)%Z)%Z ->
+   ((128%Z <= x)%Z -> ((to_sint8 x) = (to_sint8 (x - 256%Z)%Z))) /\
+   (~ (128%Z <= x)%Z -> ((to_sint8 x) = x))).
+
+Parameter to_uint16: Numbers.BinNums.Z -> Numbers.BinNums.Z.
+
+Axiom to_uint16'def :
+  forall (x:Numbers.BinNums.Z),
+  ((x < 0%Z)%Z -> ((to_uint16 x) = (to_uint16 (x + 65536%Z)%Z))) /\
+  (~ (x < 0%Z)%Z ->
+   ((65536%Z <= x)%Z -> ((to_uint16 x) = (to_uint16 (x - 65536%Z)%Z))) /\
+   (~ (65536%Z <= x)%Z -> ((to_uint16 x) = x))).
+
+Parameter to_sint16: Numbers.BinNums.Z -> Numbers.BinNums.Z.
+
+Axiom to_sint16'def :
+  forall (x:Numbers.BinNums.Z),
+  ((x < (-32768%Z)%Z)%Z -> ((to_sint16 x) = (to_sint16 (x + 65536%Z)%Z))) /\
+  (~ (x < (-32768%Z)%Z)%Z ->
+   ((32768%Z <= x)%Z -> ((to_sint16 x) = (to_sint16 (x - 65536%Z)%Z))) /\
+   (~ (32768%Z <= x)%Z -> ((to_sint16 x) = x))).
+
+Parameter to_uint32: Numbers.BinNums.Z -> Numbers.BinNums.Z.
+
+Axiom to_uint32'def :
+  forall (x:Numbers.BinNums.Z),
+  ((x < 0%Z)%Z -> ((to_uint32 x) = (to_uint32 (x + 4294967296%Z)%Z))) /\
+  (~ (x < 0%Z)%Z ->
+   ((4294967296%Z <= x)%Z ->
+    ((to_uint32 x) = (to_uint32 (x - 4294967296%Z)%Z))) /\
+   (~ (4294967296%Z <= x)%Z -> ((to_uint32 x) = x))).
+
+Parameter to_sint32: Numbers.BinNums.Z -> Numbers.BinNums.Z.
+
+Axiom to_sint32'def :
+  forall (x:Numbers.BinNums.Z),
+  ((x < (-2147483648%Z)%Z)%Z ->
+   ((to_sint32 x) = (to_sint32 (x + 4294967296%Z)%Z))) /\
+  (~ (x < (-2147483648%Z)%Z)%Z ->
+   ((2147483648%Z <= x)%Z ->
+    ((to_sint32 x) = (to_sint32 (x - 4294967296%Z)%Z))) /\
+   (~ (2147483648%Z <= x)%Z -> ((to_sint32 x) = x))).
+
+Parameter to_uint64: Numbers.BinNums.Z -> Numbers.BinNums.Z.
+
+Axiom to_uint64'def :
+  forall (x:Numbers.BinNums.Z),
+  ((x < 0%Z)%Z ->
+   ((to_uint64 x) = (to_uint64 (x + 18446744073709551616%Z)%Z))) /\
+  (~ (x < 0%Z)%Z ->
+   ((18446744073709551616%Z <= x)%Z ->
+    ((to_uint64 x) = (to_uint64 (x - 18446744073709551616%Z)%Z))) /\
+   (~ (18446744073709551616%Z <= x)%Z -> ((to_uint64 x) = x))).
+
+Parameter to_sint64: Numbers.BinNums.Z -> Numbers.BinNums.Z.
+
+Axiom to_sint64'def :
+  forall (x:Numbers.BinNums.Z),
+  ((x < (-9223372036854775808%Z)%Z)%Z ->
+   ((to_sint64 x) = (to_sint64 (x + 18446744073709551616%Z)%Z))) /\
+  (~ (x < (-9223372036854775808%Z)%Z)%Z ->
+   ((9223372036854775808%Z <= x)%Z ->
+    ((to_sint64 x) = (to_sint64 (x - 18446744073709551616%Z)%Z))) /\
+   (~ (9223372036854775808%Z <= x)%Z -> ((to_sint64 x) = x))).
+
+Parameter two_power_abs: Numbers.BinNums.Z -> Numbers.BinNums.Z.
+
+(* Why3 assumption *)
+Definition is_uint (n:Numbers.BinNums.Z) (x:Numbers.BinNums.Z) : Prop :=
+  (0%Z <= x)%Z /\ (x < (two_power_abs n))%Z.
+
+(* Why3 assumption *)
+Definition is_sint (n:Numbers.BinNums.Z) (x:Numbers.BinNums.Z) : Prop :=
+  ((-(two_power_abs n))%Z <= x)%Z /\ (x < (two_power_abs n))%Z.
+
+Parameter to_uint:
+  Numbers.BinNums.Z -> Numbers.BinNums.Z -> Numbers.BinNums.Z.
+
+Parameter to_sint:
+  Numbers.BinNums.Z -> Numbers.BinNums.Z -> Numbers.BinNums.Z.
+
+Axiom is_to_uint8 : forall (x:Numbers.BinNums.Z), is_uint8 (to_uint8 x).
+
+Axiom is_to_sint8 : forall (x:Numbers.BinNums.Z), is_sint8 (to_sint8 x).
+
+Axiom is_to_uint16 : forall (x:Numbers.BinNums.Z), is_uint16 (to_uint16 x).
+
+Axiom is_to_sint16 : forall (x:Numbers.BinNums.Z), is_sint16 (to_sint16 x).
+
+Axiom is_to_uint32 : forall (x:Numbers.BinNums.Z), is_uint32 (to_uint32 x).
+
+Axiom is_to_sint32 : forall (x:Numbers.BinNums.Z), is_sint32 (to_sint32 x).
+
+Axiom is_to_uint64 : forall (x:Numbers.BinNums.Z), is_uint64 (to_uint64 x).
+
+Axiom is_to_sint64 : forall (x:Numbers.BinNums.Z), is_sint64 (to_sint64 x).
+
+Axiom id_uint8 :
+  forall (x:Numbers.BinNums.Z), is_uint8 x -> ((to_uint8 x) = x).
+
+Axiom id_sint8 :
+  forall (x:Numbers.BinNums.Z), is_sint8 x -> ((to_sint8 x) = x).
+
+Axiom id_uint16 :
+  forall (x:Numbers.BinNums.Z), is_uint16 x -> ((to_uint16 x) = x).
+
+Axiom id_sint16 :
+  forall (x:Numbers.BinNums.Z), is_sint16 x -> ((to_sint16 x) = x).
+
+Axiom id_uint32 :
+  forall (x:Numbers.BinNums.Z), is_uint32 x -> ((to_uint32 x) = x).
+
+Axiom id_sint32 :
+  forall (x:Numbers.BinNums.Z), is_sint32 x -> ((to_sint32 x) = x).
+
+Axiom id_uint64 :
+  forall (x:Numbers.BinNums.Z), is_uint64 x -> ((to_uint64 x) = x).
+
+Axiom id_sint64 :
+  forall (x:Numbers.BinNums.Z), is_sint64 x -> ((to_sint64 x) = x).
+
+Axiom id_uint8_inl :
+  forall (x:Numbers.BinNums.Z), (0%Z <= x)%Z /\ (x < 256%Z)%Z ->
+  ((to_uint8 x) = x).
+
+Axiom id_sint8_inl :
+  forall (x:Numbers.BinNums.Z), ((-128%Z)%Z <= x)%Z /\ (x < 128%Z)%Z ->
+  ((to_sint8 x) = x).
+
+Axiom id_uint16_inl :
+  forall (x:Numbers.BinNums.Z), (0%Z <= x)%Z /\ (x < 65536%Z)%Z ->
+  ((to_uint16 x) = x).
+
+Axiom id_sint16_inl :
+  forall (x:Numbers.BinNums.Z), ((-32768%Z)%Z <= x)%Z /\ (x < 32768%Z)%Z ->
+  ((to_sint16 x) = x).
+
+Axiom id_uint32_inl :
+  forall (x:Numbers.BinNums.Z), (0%Z <= x)%Z /\ (x < 4294967296%Z)%Z ->
+  ((to_uint32 x) = x).
+
+Axiom id_sint32_inl :
+  forall (x:Numbers.BinNums.Z),
+  ((-2147483648%Z)%Z <= x)%Z /\ (x < 2147483648%Z)%Z -> ((to_sint32 x) = x).
+
+Axiom id_uint64_inl :
+  forall (x:Numbers.BinNums.Z),
+  (0%Z <= x)%Z /\ (x < 18446744073709551616%Z)%Z -> ((to_uint64 x) = x).
+
+Axiom id_sint64_inl :
+  forall (x:Numbers.BinNums.Z),
+  ((-9223372036854775808%Z)%Z <= x)%Z /\ (x < 9223372036854775808%Z)%Z ->
+  ((to_sint64 x) = x).
+
+Axiom proj_int8 :
+  forall (x:Numbers.BinNums.Z), ((to_sint8 (to_uint8 x)) = (to_sint8 x)).
+
+Axiom proj_int16 :
+  forall (x:Numbers.BinNums.Z), ((to_sint16 (to_uint16 x)) = (to_sint16 x)).
+
+Axiom proj_int32 :
+  forall (x:Numbers.BinNums.Z), ((to_sint32 (to_uint32 x)) = (to_sint32 x)).
+
+Axiom proj_int64 :
+  forall (x:Numbers.BinNums.Z), ((to_sint64 (to_uint64 x)) = (to_sint64 x)).
+
+From Coq Require Import ZArith Lia.
+
+Open Scope Z_scope.
+
+(* Why3 goal *)
+Theorem wp_goal :
+  forall (i:Numbers.BinNums.Z) (i1:Numbers.BinNums.Z) (i2:Numbers.BinNums.Z)
+    (t:addr -> Numbers.BinNums.Z) (t1:addr -> Numbers.BinNums.Z)
+    (i3:Numbers.BinNums.Z) (i4:Numbers.BinNums.Z) (a:addr),
+  let a1 := havoc t1 t (shift a 0%Z) i in
+  let a2 := a1 (shift a i4) in
+  let x := ZArith.BinInt.Z.quot i 2%Z in
+  ((ZArith.BinInt.Z.rem i1 2%Z) = 0%Z) -> ~ (a2 = 0%Z) -> (0%Z < i3)%Z ->
+  (0%Z < i2)%Z -> (0%Z <= i4)%Z -> (i4 < i)%Z -> (0%Z <= i)%Z ->
+  (i4 <= i)%Z -> (x < i3)%Z -> ((-1%Z)%Z <= i)%Z -> (2%Z <= i2)%Z ->
+  (i2 <= 4611686018427387903%Z)%Z -> ((2%Z * i3)%Z <= (2%Z + i)%Z)%Z ->
+  (i3 <= (1%Z + x)%Z)%Z -> (a2 <= 1%Z)%Z -> is_sint32 i4 -> is_sint32 i3 ->
+  is_sint32 i2 -> is_sint32 i1 -> is_sint32 i -> is_sint32 a2 ->
+  (forall (i5:Numbers.BinNums.Z), (0%Z <= i5)%Z -> (i5 < x)%Z ->
+   ((a1 (shift a (2%Z * i5)%Z)) = 2%Z)) ->
+  (forall (i5:Numbers.BinNums.Z),
+   let x1 := (2%Z * i5)%Z in
+   (0%Z <= i5)%Z -> ((2%Z + x1)%Z <= i)%Z ->
+   ((a1 (shift a (1%Z + x1)%Z)) = 0%Z)) ->
+  (forall (i5:Numbers.BinNums.Z),
+   let x1 := (2%Z * i5)%Z in
+   (0%Z <= i5)%Z -> ((2%Z + i5)%Z <= i3)%Z -> ((2%Z + x1)%Z <= i)%Z ->
+   ((a1 (shift a (1%Z + x1)%Z)) = 0%Z)) ->
+  (forall (i5:Numbers.BinNums.Z),
+   let a3 := a1 (shift a i5) in
+   (0%Z <= i5)%Z -> (i5 < i4)%Z -> (a3 = 0%Z) \/ (2%Z <= a3)%Z) ->
+  ~ (forall (i5:Numbers.BinNums.Z),
+     let x1 := (2%Z * i5)%Z in
+     (0%Z <= i5)%Z -> ((2%Z + i5)%Z <= i3)%Z ->
+     ((a1 (shift a x1)) = 2%Z) /\ (x1 < i)%Z).
+Proof.
+  
+Admitted.

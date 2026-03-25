@@ -1,0 +1,355 @@
+--- Step 1 Request ---
+
+## PROOF FILE CONTEXT:
+Require Import BuiltIn.
+Require BuiltIn.
+Require HighOrd.
+Require bool.Bool.
+Require int.Int.
+Require int.Abs.
+Require int.ComputerDivision.
+Require real.Real.
+Require real.RealInfix.
+Require real.FromInt.
+Require map.Map.
+
+From Coq Require Import ZArith Lia.
+
+Open Scope Z_scope.
+
+Definition is_sint32 (x:Numbers.BinNums.Z) : Prop :=
+  ((-2147483648%Z)%Z <= x)%Z /\ (x < 2147483648%Z)%Z.
+
+Theorem wp_goal :
+  forall (i:Numbers.BinNums.Z) (i1:Numbers.BinNums.Z), (i <= i1)%Z ->
+  ((-9%Z)%Z <= i)%Z -> (i1 <= 9%Z)%Z -> (i <= 9%Z)%Z -> (i <= 10%Z)%Z ->
+  is_sint32 i -> ((i1 * i1)%Z <= 99%Z)%Z.
+Proof.
+
+## CURRENT PROOF TREE:
+1: Proof. [APPLIED]
+  Goals:
+
+--------------------------------------------------
+forall i i1 : int,
+i <= i1 ->
+- (9) <= i -> i1 <= 9 -> i <= 9 -> i <= 10 -> is_sint32 i -> i1 * i1 <= 99
+--------------------------------------------------
+
+Bullet: None
+Hypotheses: None
+
+## CURRENT PROOF PLAN:
+1. Introduce all universally quantified variables and hypotheses using `intros`.
+2. Derive the fact that i is in the range [-9, 9] using `lia` and store it in an intermediate hypothesis.
+3. Destructure the range hypothesis to get individual bounds: i >= -9 and i <= 9.
+4. Use the inequality abs(i) <= 9 by applying `Z.abs_le`.
+5. Rewrite i^2 as (Z.abs i)^2 using the identity `Z.abs_square`.
+6. Assert that Z.abs i >= 0 using `Z.abs_nonneg`.
+7. Apply `Z.square_le_mono_nonneg` to conclude that (Z.abs i)^2 <= 9^2 = 81.
+8. Conclude the goal i^2 <= 99 by transitivity of `<=` via `Z.le_trans` and `lia`.
+
+--- Step 1 Response ---
+
+Tool: "tactic", command: "intros i_1 i Hle Hlow Hup Hup_i Hsint."
+
+--- Step 2 Request ---
+
+## CURRENT PROOF TREE:
+1: Proof. [APPLIED]
+  2: intros i_1 i Hle Hlow Hup Hup_i Hsint. [APPLIED]
+  Goals:
+
+--------------------------------------------------
+i_1, i: int
+Hle: i_1 <= i
+Hlow: - (9) <= i_1
+Hup: i <= 9
+Hup_i: i_1 <= 9
+Hsint: i_1 <= 10
+
+is_sint32 i_1 -> i * i <= 99
+--------------------------------------------------
+
+Bullet: None
+
+Hypotheses: None
+
+--- Step 2 Response ---
+
+Tool: "tactic", command: "assert (Hrange: -9 <= i <= 9) by lia."
+
+--- Step 3 Request ---
+
+## CURRENT PROOF TREE:
+1: Proof. [APPLIED]
+  2: intros i_1 i Hle Hlow Hup Hup_i Hsint. [APPLIED]
+    3: assert (Hrange: -9 <= i <= 9) by lia. [APPLIED]
+      Goals:
+
+--------------------------------------------------
+i_1, i: int
+Hle: i_1 <= i
+Hlow: - (9) <= i_1
+Hup: i <= 9
+Hup_i: i_1 <= 9
+Hsint: i_1 <= 10
+Hrange: -9 <= i <= 9
+
+is_sint32 i_1 -> i * i <= 99
+--------------------------------------------------
+
+Bullet: None
+
+Hypotheses:
+Ltac lia := Zify.zify; xlia zchecker.
+Notation "x <= y <= z" := (x <= y /\ y <= z) : N_scope.
+Notation "- x" := (Ropp x) : R_scope.
+
+--- Step 3 Response ---
+
+Tool: "tactic", command: "destruct Hrange as [Hi_low Hi_up]."
+
+--- Step 4 Request ---
+
+## CURRENT PROOF TREE:
+1: Proof. [APPLIED]
+  2: intros i_1 i Hle Hlow Hup Hup_i Hsint. [APPLIED]
+    3: assert (Hrange: -9 <= i <= 9) by lia. [APPLIED]
+      4: destruct Hrange as [Hi_low Hi_up]. [APPLIED]
+        Goals:
+
+--------------------------------------------------
+i_1, i: int
+Hle: i_1 <= i
+Hlow: - (9) <= i_1
+Hup: i <= 9
+Hup_i: i_1 <= 9
+Hsint: i_1 <= 10
+Hi_low: -9 <= i
+Hi_up: i <= 9
+
+is_sint32 i_1 -> i * i <= 99
+--------------------------------------------------
+
+Bullet: None
+
+Hypotheses: None
+
+--- Step 4 Response ---
+
+Tool: "query", command: "Print Z.abs."
+
+--- Step 5 Request ---
+
+Definition abs z := match z with | 0 => 0 | pos p => pos p | neg p => pos p end.
+
+--- Step 5 Response ---
+
+Tool: "tactic", command: "assert (Hi_abs_le : Z.abs i <= 9) by now apply Z.abs_le."
+
+--- Step 6 Request ---
+
+## CURRENT PROOF TREE:
+1: Proof. [APPLIED]
+  2: intros i_1 i Hle Hlow Hup Hup_i Hsint. [APPLIED]
+    3: assert (Hrange: -9 <= i <= 9) by lia. [APPLIED]
+      4: destruct Hrange as [Hi_low Hi_up]. [APPLIED]
+        5: assert (Hi_abs_le : Z.abs i <= 9) by now apply Z.abs_le. [APPLIED]
+          Goals:
+
+--------------------------------------------------
+i_1, i: int
+Hle: i_1 <= i
+Hlow: - (9) <= i_1
+Hup: i <= 9
+Hup_i: i_1 <= 9
+Hsint: i_1 <= 10
+Hi_low: -9 <= i
+Hi_up: i <= 9
+Hi_abs_le: Z.abs i <= 9
+
+is_sint32 i_1 -> i * i <= 99
+--------------------------------------------------
+
+Bullet: None
+
+Hypotheses:
+Notation "x <= y" := (CRle _ x y) : ConstructiveReals.
+Definition abs z := match z with | 0 => 0 | pos p => pos p | neg p => pos p end.
+
+--- Step 6 Response ---
+
+Tool: "tactic", command: "rewrite <- Z.abs_square."
+
+--- Step 7 Request ---
+
+## CURRENT PROOF TREE:
+1: Proof. [APPLIED]
+  2: intros i_1 i Hle Hlow Hup Hup_i Hsint. [APPLIED]
+    3: assert (Hrange: -9 <= i <= 9) by lia. [APPLIED]
+      4: destruct Hrange as [Hi_low Hi_up]. [APPLIED]
+        5: assert (Hi_abs_le : Z.abs i <= 9) by now apply Z.abs_le. [APPLIED]
+          6: rewrite <- Z.abs_square. [APPLIED]
+            Goals:
+
+--------------------------------------------------
+i_1, i: int
+Hle: i_1 <= i
+Hlow: - (9) <= i_1
+Hup: i <= 9
+Hup_i: i_1 <= 9
+Hsint: i_1 <= 10
+Hi_low: -9 <= i
+Hi_up: i <= 9
+Hi_abs_le: Z.abs i <= 9
+
+is_sint32 i_1 -> Z.abs i * Z.abs i <= 99
+--------------------------------------------------
+
+Bullet: None
+
+Hypotheses: None
+
+--- Step 7 Response ---
+
+Tool: "tactic", command: "assert (0 <= Z.abs i) by apply Z.abs_nonneg."
+
+--- Step 8 Request ---
+
+## CURRENT PROOF TREE:
+1: Proof. [APPLIED]
+  2: intros i_1 i Hle Hlow Hup Hup_i Hsint. [APPLIED]
+    3: assert (Hrange: -9 <= i <= 9) by lia. [APPLIED]
+      4: destruct Hrange as [Hi_low Hi_up]. [APPLIED]
+        5: assert (Hi_abs_le : Z.abs i <= 9) by now apply Z.abs_le. [APPLIED]
+          6: rewrite <- Z.abs_square. [APPLIED]
+            7: assert (0 <= Z.abs i) by apply Z.abs_nonneg. [APPLIED]
+              Goals:
+
+--------------------------------------------------
+i_1, i: int
+Hle: i_1 <= i
+Hlow: - (9) <= i_1
+Hup: i <= 9
+Hup_i: i_1 <= 9
+Hsint: i_1 <= 10
+Hi_low: -9 <= i
+Hi_up: i <= 9
+Hi_abs_le: Z.abs i <= 9
+H: 0 <= Z.abs i
+
+is_sint32 i_1 -> Z.abs i * Z.abs i <= 99
+--------------------------------------------------
+
+Bullet: None
+
+Hypotheses:
+Notation "x <= y" := (CRle _ x y) : ConstructiveReals.
+Definition abs z := match z with | 0 => 0 | pos p => pos p | neg p => pos p end.
+
+--- Step 8 Response ---
+
+Tool: "tactic", command: "assert (Habs_sq_le_81 : Z.abs i * Z.abs i <= 9 * 9) by (apply Z.square_le_mono_nonneg; lia)."
+
+--- Step 9 Request ---
+
+## CURRENT PROOF TREE:
+1: Proof. [APPLIED]
+  2: intros i_1 i Hle Hlow Hup Hup_i Hsint. [APPLIED]
+    3: assert (Hrange: -9 <= i <= 9) by lia. [APPLIED]
+      4: destruct Hrange as [Hi_low Hi_up]. [APPLIED]
+        5: assert (Hi_abs_le : Z.abs i <= 9) by now apply Z.abs_le. [APPLIED]
+          6: rewrite <- Z.abs_square. [APPLIED]
+            7: assert (0 <= Z.abs i) by apply Z.abs_nonneg. [APPLIED]
+              8: assert (Habs_sq_le_81 : Z.abs i * Z.abs i <= 9 * 9) by (apply Z.square_le_mono_nonneg; lia). [APPLIED]
+                Goals:
+
+--------------------------------------------------
+i_1, i: int
+Hle: i_1 <= i
+Hlow: - (9) <= i_1
+Hup: i <= 9
+Hup_i: i_1 <= 9
+Hsint: i_1 <= 10
+Hi_low: -9 <= i
+Hi_up: i <= 9
+Hi_abs_le: Z.abs i <= 9
+H: 0 <= Z.abs i
+Habs_sq_le_81: Z.abs i * Z.abs i <= 9 * 9
+
+is_sint32 i_1 -> Z.abs i * Z.abs i <= 99
+--------------------------------------------------
+
+Bullet: None
+
+Hypotheses:
+Ltac lia := Zify.zify; xlia zchecker.
+Notation "x <= y" := (CRle _ x y) : ConstructiveReals.
+Notation "x * y" := (CRmult _ x y) : ConstructiveReals.
+Definition abs z := match z with | 0 => 0 | pos p => pos p | neg p => pos p end.
+
+--- Step 9 Response ---
+
+Tool: "tactic", command: "intros _."
+
+--- Step 10 Request ---
+
+## CURRENT PROOF TREE:
+1: Proof. [APPLIED]
+  2: intros i_1 i Hle Hlow Hup Hup_i Hsint. [APPLIED]
+    3: assert (Hrange: -9 <= i <= 9) by lia. [APPLIED]
+      4: destruct Hrange as [Hi_low Hi_up]. [APPLIED]
+        5: assert (Hi_abs_le : Z.abs i <= 9) by now apply Z.abs_le. [APPLIED]
+          6: rewrite <- Z.abs_square. [APPLIED]
+            7: assert (0 <= Z.abs i) by apply Z.abs_nonneg. [APPLIED]
+              8: assert (Habs_sq_le_81 : Z.abs i * Z.abs i <= 9 * 9) by (apply Z.square_le_mono_nonneg; lia). [APPLIED]
+                9: intros _. [APPLIED]
+                  Goals:
+
+--------------------------------------------------
+i_1, i: int
+Hle: i_1 <= i
+Hlow: - (9) <= i_1
+Hup: i <= 9
+Hup_i: i_1 <= 9
+Hsint: i_1 <= 10
+Hi_low: -9 <= i
+Hi_up: i <= 9
+Hi_abs_le: Z.abs i <= 9
+H: 0 <= Z.abs i
+Habs_sq_le_81: Z.abs i * Z.abs i <= 9 * 9
+
+Z.abs i * Z.abs i <= 99
+--------------------------------------------------
+
+Bullet: None
+
+Hypotheses: None
+
+--- Step 10 Response ---
+
+Tool: "tactic", command: "apply (Z.le_trans _ (9 * 9)); lia."
+
+--- Step 11 Request ---
+
+## CURRENT PROOF TREE:
+1: Proof. [APPLIED]
+  2: intros i_1 i Hle Hlow Hup Hup_i Hsint. [APPLIED]
+    3: assert (Hrange: -9 <= i <= 9) by lia. [APPLIED]
+      4: destruct Hrange as [Hi_low Hi_up]. [APPLIED]
+        5: assert (Hi_abs_le : Z.abs i <= 9) by now apply Z.abs_le. [APPLIED]
+          6: rewrite <- Z.abs_square. [APPLIED]
+            7: assert (0 <= Z.abs i) by apply Z.abs_nonneg. [APPLIED]
+              8: assert (Habs_sq_le_81 : Z.abs i * Z.abs i <= 9 * 9) by (apply Z.square_le_mono_nonneg; lia). [APPLIED]
+                9: intros _. [APPLIED]
+                  10: apply (Z.le_trans _ (9 * 9)); lia. [PROVED]
+
+Hypotheses:
+Notation "x * y" := (CRmult _ x y) : ConstructiveReals.
+Ltac lia := Zify.zify; xlia zchecker.
+
+--- Step 11 Response ---
+
+Tool: "tactic", command: "Qed."
+
