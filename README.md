@@ -1,30 +1,39 @@
-# AutoRocq: Agentic Verification of Software Systems
+# AutoRocq: Agentic Theorem Prover for Verification
 
-This repository contains the source code of AutoRocq, an agent prover in Rocq.
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0.en.html) [![License: Commercial](https://img.shields.io/badge/License-Commercial-green.svg)](LICENSE)
 
-### Main Agent Loop (Pseudo)
+**Paper**: [FSE 2026](https://arxiv.org/abs/2511.17330)
 
-```
-tools = ['plan', 'query', 'tactic', 'rollback']
+---
 
+
+This repository contains the source code of AutoRocq, an agent prover in Rocq (formerly Coq) 8.18.0.
+
+To discharge a formally stated theorem in Rocq, the agent runs in the following loop:
+
+```python
 context = get_initial_context()
-
+tools = ['plan', 'tactic', 'context_search']
 while not coq.is_proof_complete():
     action = llm.next_action(goal, context)
-    action_handler(action)
+    coq.apply(action)
     context.update()
     goal.update()
 ```
 
+where the LLM interacts with the Rocq proof assistant (via [CoqPyt](https://github.com/sr-lab/coqpyt)) in real time to develop a proof. 
+
+---
+
 ### Directory Structure
 
 ```
-eval/                              # Directory for eval results
-└── final/                         # Final evluation results
-
-AutoRocq-bench/                    # Benchmark of verification lemmas
+AutoRocq-bench/                    # Benchmark of verification theorems
 
 dockerfile/                        # Dockerfile of AutoRocq and comparison tools
+
+eval/                              # Directory for eval results
+└── final/                         # Final evluation results
 
 proof-search/                      # Directory of proof agent src
 ├── main.py                        # Entry point
@@ -69,7 +78,12 @@ python3 -m main examples/example.v --config ./configs/minimal.json
 
 Run with `--help` for more options.
 
-### Testing on [AutoRocq-bench](https://github.com/NUS-Program-Verification/AutoRocq-bench)
+### Proving Theorems from Verification Tasks
+
+[AutoRocq-bench](https://github.com/NUS-Program-Verification/AutoRocq-bench) is a corpus of Rocq/Coq proof obligations extracted from real C code with [Frama-C](https://www.frama-c.com/) curated as part of the evaluation of AutoRocq. 
+The benchmark consists of 641 theorems generated from [SV-COMP](https://gitlab.com/sosy-lab/sv-comp/bench-defs) and 60 theorems from [assertions in the Linux kernel](https://github.com/evdenis/verker).
+On average, running each theorem costs ~$0.5 with GPT-4.1. 
+To test on this benchmark:
 
 1. Clone the submodule with
 
@@ -87,8 +101,14 @@ cd AutoRocq-bench/libautorocq; make
 
 4. Run the agent by pointing to the target `.v` file. The first run may take a few minutes to initialize the library.
 
+---
 
-## Reproducing Figures
+### Replicating Results from Paper
+
+<details> 
+<summary><b>Reproducing Figures</b></summary>
+
+<br>
 
 - Figure 3
 
@@ -111,9 +131,20 @@ python3 scripts/analyze/draw_results.py \
 ```bash
 python3 scripts/analyze/plot_searches.py
 ```
+</details> 
 
+<details> 
+<summary><b>Setting Up Comparison Tools</b></summary>
 
-## Citation / Attribution
+<br>
+
+Coming soon...
+
+</details>
+
+---
+
+### Citation / Attribution
 
 If you use our work for academic research, please cite our paper:
 
