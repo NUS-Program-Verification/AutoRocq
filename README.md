@@ -1,6 +1,6 @@
 # AutoRocq: Agentic Theorem Prover for Verification
 
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0.en.html) [![License: Commercial](https://img.shields.io/badge/License-Commercial-green.svg)](LICENSE)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0.en.html) [![License: Commercial](https://img.shields.io/badge/License-Commercial-green.svg)](LICENSE) [![Discord](https://img.shields.io/badge/Discord-Join%20Server-5865F2?logo=discord&logoColor=white)](https://discord.gg/HfS2zcMzhS)
 
 **Paper**: [FSE 2026](https://arxiv.org/abs/2511.17330)
 
@@ -70,13 +70,19 @@ opam switch import deps.opam
 
 1. Set up API key in the config or by running `export OPENAI_API_KEY=...`
 
-2. From `proof-search` directory, run:
+2. To prove [`examples/example.v`](proof-search/examples/example.v) with a minimal [config](./configs/minimal.json), go to `proof-search` directory and run:
 
 ```bash
 python3 -m main examples/example.v --config ./configs/minimal.json
 ```
 
-Run with `--help` for more options.
+If AutoRocq runs successfully, you will be able to see in the terminal
+```
+[INFO] [Main]: 🎉 Proof completed successfully!
+```
+and the proof script is saved in the same [`example.v`](proof-search/examples/example.v) file. You will also be able to find saved proof states and aggregated results at `data/`, which can be reused to prove other goals in the future.
+
+For more configurations of the tool, check out the [readme](proof-search/configs/readme.md) or run with `--help` for more options.
 
 ### Proving Theorems from Verification Tasks
 
@@ -145,6 +151,8 @@ Coming soon...
 ---
 
 ### Citation / Attribution
+
+If you are interested in the work, consider joining the [Discord](https://discord.gg/HfS2zcMzhS) server for the latest discussions/development of agentic program verification!
 
 If you use our work for academic research, please cite our paper:
 

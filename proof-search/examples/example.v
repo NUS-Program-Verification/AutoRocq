@@ -10,5 +10,7 @@ Ltac reduce_eq := simpl; reflexivity.
 
 Lemma orb_true_l : forall b : bool, orb true b = true.
 Proof.
-
-Admitted.
+  intros b.
+  simpl.
+  reflexivity.
+  Qed.
