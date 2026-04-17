@@ -11,7 +11,6 @@ class LLMConfig:
     temperature: float = 0.1
     max_tokens: int = 512
     api_key: Optional[str] = None
-    base_url: Optional[str] = None
     timeout: int = 30
     enable_caching: bool = True
 
@@ -31,21 +30,10 @@ class CoqConfig:
     # Additional options to add to _CoqProject (e.g., ["-arg", "-impredicative-set"])
 
 @dataclass
-class SearchConfig:
-    """Configuration for context search."""
-    max_search_terms: int = 3
-    max_results_per_term: int = 10
-    enable_auto_search: bool = True
-    search_on_failure_count: int = 3
-    enable_context_search: bool = True
-    context_search_depth: int = 3
-
-@dataclass
 class ProofAgentConfig:
     """Main configuration for the proof agent."""
     llm: LLMConfig
     coq: CoqConfig
-    search: SearchConfig
 
     # General settings
     log_level: str = "INFO"
@@ -81,7 +69,6 @@ class ProofAgentConfig:
         return cls(
             llm=LLMConfig(**config_dict.get('llm', {})),
             coq=CoqConfig(**config_dict.get('coq', {})),
-            search=SearchConfig(**config_dict.get('search', {})),
             log_level=config_dict.get("log_level", "INFO"),
             log_file=config_dict.get("log_file"),
             output_dir=config_dict.get("output_dir"),

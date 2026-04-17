@@ -70,7 +70,7 @@ opam switch import deps.opam
 
 1. Set up API key in the config or by running `export OPENAI_API_KEY=...`
 
-2. To prove [`examples/example.v`](proof-search/examples/example.v) with a minimal [config](./configs/minimal.json), go to `proof-search` directory and run:
+2. To prove [`examples/example.v`](proof-search/examples/example.v) with a minimal [config](proof-search/configs/minimal.json), go to `proof-search` directory and run:
 
 ```bash
 python3 -m main examples/example.v --config ./configs/minimal.json
@@ -106,6 +106,12 @@ cd AutoRocq-bench/libautorocq; make
 3. Configure `library_paths` in `proof-search/configs/default_config.json` to point to `libautorocq`.
 
 4. Run the agent by pointing to the target `.v` file. The first run may take a few minutes to initialize the library.
+
+For example, go to `proof-search` directory and run:
+
+```bash
+python3 -m main examples/main_loop_invariant_2_established_Coq.v --config ./configs/default_config.json
+```
 
 ---
 
