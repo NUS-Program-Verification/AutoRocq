@@ -625,7 +625,7 @@ def main():
     logger.info(f"🎯 Target Theorem: {args.theorem or 'auto-detect'}")
     logger.info(f"🔧 Configuration:")
     logger.info(f"   Max steps: {config.coq.max_steps}")
-    logger.info(f"   Context search: {config.search.enable_context_search}")
+    logger.info(f"   Context search: {config.enable_context_search}")
     logger.info(f"   Output directory: {output_dir}")
 
     # Log library configuration if present
