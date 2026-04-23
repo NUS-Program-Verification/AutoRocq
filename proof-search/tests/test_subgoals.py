@@ -10,7 +10,7 @@ from backend.coq_interface import CoqInterface
 from utils.config import ProofAgentConfig
 
 # --- CONFIGURATION ---
-coq_file = PROJECT_ROOT / "examples" / "match_string_assert.v"
+coq_file = PROJECT_ROOT / "examples" / "main_loop_invariant_2_established_Coq.v"
 config_file = PROJECT_ROOT / "configs" / "default_config.json"
 
 def test_intros_tactic():
