@@ -25,6 +25,14 @@ where the LLM interacts with the Rocq proof assistant (via [CoqPyt](https://gith
 
 ---
 
+### What's New
+
+#### LiteLLM support
+
+AutoRocq now supports your favorite model through LiteLLM! See the supported model [list](https://models.litellm.ai) and [configuration](proof-search/configs/readme.md).
+
+---
+
 ### Directory Structure
 
 ```
@@ -68,7 +76,7 @@ opam switch import deps.opam
 
 ### Minimal Example of Proof Agent
 
-1. Set up API key in the config or by running `export OPENAI_API_KEY=...`
+1. Set up API key in the config or by running `export OPENAI_API_KEY=...`. If you prefer models from other providers, see [here](proof-search/configs/readme.md).
 
 2. To prove [`examples/example.v`](proof-search/examples/example.v) with a minimal [config](proof-search/configs/minimal.json), go to `proof-search` directory and run:
 

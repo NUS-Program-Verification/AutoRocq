@@ -14,7 +14,6 @@ RUN apt install -y --fix-missing \
     zlib1g-dev adwaita-icon-theme-full curl libgmp-dev pkg-config bubblewrap
 
 RUN apt install python3-pip -y
-RUN python3 -m pip install openai
 
 RUN apt update && apt install -y opam m4
 RUN opam init -y --bare --disable-sandboxing

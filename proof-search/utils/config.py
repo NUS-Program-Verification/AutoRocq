@@ -7,10 +7,11 @@ from dataclasses import dataclass, asdict, field
 @dataclass
 class LLMConfig:
     """Configuration for LLM settings."""
-    model: str = "gpt-4.1"
+    model: str = "openai/gpt-4.1"
     temperature: float = 0.1
     max_tokens: int = 512
     api_key: Optional[str] = None
+    api_base: Optional[str] = None
     timeout: int = 30
     enable_caching: bool = True
 
@@ -96,8 +97,6 @@ class ProofAgentConfig:
         config = cls.default()
         
         # LLM settings
-        if os.getenv('OPENAI_API_KEY'):
-            config.llm.api_key = os.getenv('OPENAI_API_KEY')
         if os.getenv('LLM_MODEL'):
             config.llm.model = os.getenv('LLM_MODEL')
         if os.getenv('LLM_TEMPERATURE'):
