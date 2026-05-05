@@ -19,6 +19,10 @@ out*/
 .frama-c/
 .vscode/
 .cursor/
+.claude/
+AGENT.md
+AGENTS.md
+CLAUDE.md
 .DS_Store
 results/
 *Makefile.*

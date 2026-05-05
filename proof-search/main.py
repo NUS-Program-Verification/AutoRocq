@@ -6,7 +6,7 @@ Orchestrates the proof search process using LLM-generated tactics.
 
 import sys
 import argparse
-import json
+import logging
 import signal
 from datetime import datetime
 from pathlib import Path
@@ -245,6 +245,7 @@ def initialize_components(args, config: ProofAgentConfig, logger) -> Dict[str, A
             model=config.llm.model,
             temperature=config.llm.temperature,
             api_key=getattr(config.llm, 'api_key', None),
+            api_base=getattr(config.llm, 'api_base', None),
             max_tokens=getattr(config.llm, 'max_tokens', 2000),
             timeout=getattr(config.llm, 'timeout', 30),
             history_file=str(history_file),
@@ -334,44 +335,6 @@ def print_initial_state(components: Dict[str, Any], logger):
         logger.info(f"Found {len(terms)} context terms")
     except Exception as e:
         logger.warning(f"Could not retrieve context terms: {e}")
-
-
-def generate_visualizations(components: Dict[str, Any], output_dir: Path, logger):
-    """Generate visualizations and reports including tactic history."""
-    try:
-        # Generate statistics report
-        stats_file = output_dir / "proof_statistics.txt"
-        with open(stats_file, 'w') as f:
-            f.write("=== Proof Agent Statistics ===\n\n")
-            
-            # Controller stats
-            controller = components["controller"]
-            f.write(f"Steps taken: {controller.step_count}\n")
-            f.write(f"Successful tactics: {len(controller.successful_tactics)}\n")
-            f.write(f"Failed tactics: {len(controller.failed_tactics)}\n")
-        
-        logger.info(f"Statistics saved to: {stats_file}")
-        
-        # Generate tactic history statistics
-        controller = components["controller"]
-        if hasattr(controller, 'tactic_history'):
-            history_stats = controller.tactic_history.get_statistics()
-            
-            stats_file = output_dir / "tactic_history_stats.json"
-            with open(stats_file, 'w') as f:
-                json.dump(history_stats, f, indent=2)
-            
-            logger.info(f"Tactic history statistics saved to: {stats_file}")
-            
-            # Print summary
-            logger.info(f"Tactic History Summary:")
-            logger.info(f"  Total successful tactics recorded: {history_stats.get('total_entries', 0)}")
-            logger.info(f"  Unique tactics used: {history_stats.get('unique_tactics', 0)}")
-            logger.info(f"  Theorems covered: {history_stats.get('theorems_covered', 0)}")
-        
-    except Exception as e:
-        logger.warning(f"Failed to generate visualizations: {e}")
-
 
 @contextmanager  
 def timeout_context(seconds):
@@ -736,21 +699,26 @@ def main():
             logger.info("=== Token Usage Statistics ===")
             stats = components["coq_chat_session"].get_token_statistics()
             
+            logger.info(f"📊 API calls: {stats['api_calls']}")
             logger.info(f"📊 Total prompt tokens: {stats['total_prompt_tokens']:,}")
             logger.info(f"📊 Total completion tokens: {stats['total_completion_tokens']:,}")
-            logger.info(f"📊 Total cached tokens: {stats['total_cached_tokens']:,}")
+            logger.info(f"📊 Total cached tokens (read): {stats['total_cached_tokens']:,}")
+            logger.info(f"📊 Total cache-write tokens: {stats.get('total_cache_creation_tokens', 0):,}")
             logger.info(f"📊 Total tokens: {stats['total_tokens']:,}")
-            logger.info(f"📊 API calls: {stats['api_calls']}")
+            logger.info(f"📊 Estimated cost (USD): ${stats.get('total_cost_usd', 0.0):.4f}")
             
             # Calculate cache hit rate
             if stats['total_prompt_tokens'] > 0:
                 cache_hit_rate = (stats['total_cached_tokens'] / stats['total_prompt_tokens']) * 100
                 logger.info(f"📊 Cache hit rate: {cache_hit_rate:.1f}%")
+            
+            # Print cost to terminal if not logged
+            if logger.getEffectiveLevel() > logging.INFO:
+                print(f"📊 API calls: {stats['api_calls']}")
+                print(f"📊 Estimated cost (USD): ${stats.get('total_cost_usd', 0.0):.4f}")
                     
         except Exception as e:
             logger.warning(f"Could not retrieve token statistics: {e}")
-        
-        # generate_visualizations(components, output_dir, logger)
         
         cleanup_components(components, logger)
         

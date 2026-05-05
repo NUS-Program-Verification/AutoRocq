@@ -49,12 +49,12 @@ The JSON config file has three top-level sections: `llm`, `coq`, `ablation`, plu
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `model` | string | `gpt-4.1` | LLM model name. Only OpenAI models are supported at the moment. |
+| `model` | string | `openai/gpt-4.1` | LLM model name with provider prefix. See [here](https://docs.litellm.ai/docs/providers). |
 | `temperature` | float | `0.1` | Sampling temperature. |
 | `max_tokens` | int | `512` | Maximum tokens per LLM response. |
-| `api_key` | string | `null` | API key. Can also be set via `OPENAI_API_KEY` env var. |
+| `api_key` | string | `null` | API key. Can also be set via env var based on the provider (e.g. `OPENAI_API_KEY`). |
 | `timeout` | int | `30` | LLM request timeout in seconds. |
-| `enable_caching` | bool | `true` | Enable prompt-level caching for repeated queries. |
+| `enable_caching` | bool | `true` | Enable prompt-level caching for repeated queries. Only applied for [supported providers](https://docs.litellm.ai/docs/completion/prompt_caching). |
 
 #### `coq` — Coq Interface Settings
 
@@ -99,7 +99,7 @@ The following environment variables are recognized as fallbacks when no config f
 
 | Variable | Maps To |
 |---|---|
-| `OPENAI_API_KEY` | `llm.api_key` |
+| `*_API_KEY` | `llm.api_key` |
 | `LLM_MODEL` | `llm.model` |
 | `LLM_TEMPERATURE` | `llm.temperature` |
 | `COQ_PATH` | `coq.coq_path` |
@@ -118,25 +118,28 @@ The following environment variables are recognized as fallbacks when no config f
 ```json
 {
   "llm": {
-    "model": "gpt-4.1",
+    "model": "openai/gpt-4.1",
     "temperature": 0.0,
     "max_tokens": 2000,
     "timeout": 30,
+    "api_key": null,
+    "api_base": null,
     "enable_caching": true
   },
   "coq": {
     "timeout": 60,
     "max_steps": 10,
-    "library_paths": [],
     "auto_setup_coqproject": true
   },
   "ablation": {
     "enable_recording": true,
     "enable_error_feedback": true,
     "enable_context_search": true,
+    "max_context_search": 3,
     "max_errors": 3
   },
-  "log_level": "INFO"
+  "log_level": "INFO",
+  "output_dir": null
 }
 ```
 
@@ -146,19 +149,26 @@ The following environment variables are recognized as fallbacks when no config f
 ```json
 {
   "llm": {
-    "model": "gpt-4.1",
+    "model": "openai/gpt-4.1",
     "temperature": 0.0,
     "max_tokens": 2000,
     "timeout": 30,
+    "api_key": null,
+    "api_base": null,
     "enable_caching": true
   },
   "coq": {
     "timeout": 60,
     "max_steps": 100,
+    "workspace": null,
     "library_paths": [
-      {"path": "/autorocq/AutoRocq-bench/libautorocq", "name": "libframac"}
+      {
+        "path": "/autorocq/AutoRocq-bench/libautorocq",
+        "name": "libframac"
+      }
     ],
-    "auto_setup_coqproject": true
+    "auto_setup_coqproject": true,
+    "coqproject_extra_options": []
   },
   "ablation": {
     "enable_recording": true,
@@ -170,6 +180,7 @@ The following environment variables are recognized as fallbacks when no config f
     "max_context_search": 3,
     "max_errors": 3
   },
-  "log_level": "INFO"
+  "log_level": "DEBUG",
+  "output_dir": null
 }
 ```

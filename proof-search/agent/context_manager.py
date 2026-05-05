@@ -3,12 +3,12 @@ import time
 import json
 import traceback
 from typing import List, Dict, Any, Optional
-from agent.history_recorder import TacticHistoryManager
-from openai import OpenAI, RateLimitError
-from openai.types.chat import ChatCompletion
 
-from agent.context_search import ContextSearch 
- 
+import litellm
+from litellm.exceptions import RateLimitError as LiteLLMRateLimitError
+
+from agent.history_recorder import TacticHistoryManager
+from agent.context_search import ContextSearch
 from utils.logger import setup_logger, clean_ansi_codes
 from utils.coq_utils import *
 
@@ -102,18 +102,28 @@ class CoqChatSession:
             }
         }
     
+    # LiteLLM Prompt caching: https://docs.litellm.ai/docs/completion/prompt_caching
+    # Providers with Anthropic-style cache_control markers
+    EXPLICIT_CACHE_PROVIDERS = ('anthropic/', 'gemini/', 'vertex_ai/', 'vertex_ai_beta/')
+    # Providers with automatic prompt caching
+    AUTO_CACHE_PROVIDERS = ('openai/', 'deepseek/', 'xai/')
+
     # File for local session caching
-    GLOBAL_CACHE_FILE = "/tmp/openai_cache.json"
-    
-    def __init__(self, 
-                 model=None, temperature=0, api_key=None, max_tokens=15000, timeout=30, 
+    GLOBAL_CACHE_FILE = "/tmp/litellm_cache.json"
+
+    def __init__(self,
+                 model=None, temperature=0, api_key=None, api_base=None,
+                 max_tokens=15000, timeout=30,
                  enable_caching=True,
                  enable_context_search=True,
                  enable_rollback=True,
                  enable_local_session_caching=False):
-        
-        self.model = model or os.getenv("OPENAI_MODEL", "gpt-4.1")
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+
+        raw_model = model or os.getenv("LLM_MODEL", "openai/gpt-4.1")
+        # Normalize with provider prefix. Default to OpenAI.
+        self.model = raw_model if '/' in raw_model else f'openai/{raw_model}'
+        self.api_key = api_key
+        self.api_base = api_base
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.timeout = timeout
@@ -125,15 +135,17 @@ class CoqChatSession:
         self.enable_local_session_caching = enable_local_session_caching
         self.current_plan = None
         self.coq_version = "8.18.0"
-        
+
         # Token usage tracking
         self.total_prompt_tokens = 0
         self.total_completion_tokens = 0
         self.total_cached_tokens = 0
+        self.total_cache_creation_tokens = 0
+        self.total_cost = 0.0
         self.api_call_count = 0
 
         system_prompt = self.build_system_prompt()
-        
+
         self.messages = []
         self.cached_msg_len = 0
         self.add_message("system", system_prompt)
@@ -148,8 +160,6 @@ class CoqChatSession:
             self.tools.append(self.ROLLBACK_TOOL)
         
         self.logger.info(f"Available tools:\n{', '.join([tool['function']['name'] for tool in self.tools])}")
-        
-        self.client = OpenAI(api_key=self.api_key)
     
     def build_system_prompt(self) -> str:
         system = f"You are an expert in writing Coq ({self.coq_version}) proofs. You will be given a formally stated goal in Coq, and your task is to write Coq tactics to prove it, with the help of available tools. Your task NEVER harms others or violates laws."
@@ -190,20 +200,30 @@ class CoqChatSession:
         
         return (system + "\n\n" + instruction).strip()
     
+    def _supports_explicit_caching(self) -> bool:
+        return self.model.startswith(self.EXPLICIT_CACHE_PROVIDERS)
+
+    def _supports_auto_caching(self) -> bool:
+        return self.model.startswith(self.AUTO_CACHE_PROVIDERS)
+
+    def _supports_caching(self) -> bool:
+        return self._supports_explicit_caching() or self._supports_auto_caching()
+
     def add_message(self, role, content):
         """
         Add a message to the conversation history.
-        
+
         Args:
             role (str): The role of the sender ('system' or 'user').
             content (str): The content of the message.
         """
         assert role in ["system", "user"]
         message = {"role": role, "content": content}
-        if self.enable_caching:
+        # Add cache_control marker for explicit-caching providers
+        if self.enable_caching and self._supports_explicit_caching():
             message["cache_control"] = {"type": "ephemeral"}
         self.messages.append(message)
-        if self.enable_caching:
+        if self.enable_caching and self._supports_caching():
             self.cached_msg_len = len(self.messages)
     
     def add_tool_call(self, tool_call, content):
@@ -249,12 +269,10 @@ class CoqChatSession:
                 data = json.load(f)
 
         for entry in data:
-            query = entry["query"]
-            response = entry["response"]
-            if api_params == query:
-                return True, ChatCompletion.model_validate(response)
+            if api_params == entry["query"]:
+                return True, litellm.ModelResponse(**entry["response"])
 
-        response = self.client.chat.completions.create(**api_params)
+        response = litellm.completion(**api_params)
 
         data.append({"query": api_params, "response": response.model_dump()})
         with open(self.GLOBAL_CACHE_FILE, "w") as f:
@@ -299,16 +317,21 @@ class CoqChatSession:
                 "model": self.model,
                 "messages": messages_to_send,
                 "temperature": self.temperature,
-                "max_completion_tokens": self.max_tokens,
+                "max_tokens": self.max_tokens,
                 "tools": self.tools,
-                "tool_choice": "required", # always use tools
+                "tool_choice": "required",
             }
-            
+            if self.api_key:
+                api_params["api_key"] = self.api_key
+            if self.api_base:
+                api_params["api_base"] = self.api_base
+
+            using_cached_response = False
             if self.enable_local_session_caching:
                 using_cached_response, response = self.get_cached_response(api_params)
             else:
-                response = self.client.chat.completions.create(**api_params)
-            
+                response = litellm.completion(**api_params)
+
             assistant_message_obj = response.choices[0].message if response.choices else None
             prompt_tokens = response.usage.prompt_tokens if response.usage else 0
             completion_tokens = response.usage.completion_tokens if response.usage else 0
@@ -318,20 +341,29 @@ class CoqChatSession:
                 details = response.usage.prompt_tokens_details
                 if details and hasattr(details, 'cached_tokens'):
                     cached_tokens = details.cached_tokens or 0
-            
-            # Track token usage only if not using cached response
-            if not self.enable_local_session_caching or not using_cached_response:
+
+            cached_creation_tokens = 0
+            if response.usage and hasattr(response.usage, 'cache_creation_input_tokens'):
+                cached_creation_tokens = response.usage.cache_creation_input_tokens
+
+            # Track token usage and cost only for live (non-locally-cached) calls
+            if not using_cached_response:
                 self.total_prompt_tokens += prompt_tokens
                 self.total_completion_tokens += completion_tokens
                 self.total_cached_tokens += cached_tokens
+                self.total_cache_creation_tokens += cached_creation_tokens
                 self.api_call_count += 1
-            
+                try:
+                    self.total_cost += litellm.completion_cost(completion_response=response)
+                except Exception as cost_err:
+                    self.logger.warning(f"Cost computation skipped: {cost_err}")
+
             if not assistant_message_obj:
                 raise ValueError("No assistant message object found")
-            
+
             if not assistant_message_obj.tool_calls:
                 raise ValueError("No tool calls found in assistant message")
-            
+
             # Handle function/tool calls
             assistant_message_content = assistant_message_obj.content
             tool_call = assistant_message_obj.tool_calls[0]  # Get first tool call
@@ -339,10 +371,10 @@ class CoqChatSession:
                 "name": tool_call.function.name,
                 "arguments": tool_call.function.arguments
             }
-            
+
             # Add the assistant message with tool call to history
             self.add_tool_call(tool_call, assistant_message_content)
-            
+
             return {
                 "response": assistant_message_content,
                 "function_call": function_call_info,
@@ -351,13 +383,13 @@ class CoqChatSession:
                 "completion_tokens": completion_tokens,
                 "total_tokens": prompt_tokens + completion_tokens
             }
-            
-        except RateLimitError as e:
+
+        except LiteLLMRateLimitError as e:
             self.logger.error(f"Rate limit error encountered: {e}")
             self.logger.warning("Sleeping for 30 seconds to retry...")
             time.sleep(30)
             return {"response": None, "error": "Rate limit error"}
-            
+
         except Exception as e:
             self.logger.error(f"Error encountered: {e}")
             return {"response": None, "error": str(e)}
@@ -368,6 +400,8 @@ class CoqChatSession:
         Returns True if we have the right structure for optimization.
         """
         if not self.enable_caching:
+            return False
+        if not self._supports_caching():
             return False
         
         # Need at least cached messages + 2 new messages (assistant + tool)
@@ -408,8 +442,9 @@ class CoqChatSession:
         
         opt_messages.append(self.messages[-2]) # successful tool call
         opt_messages.append(self.messages[-1]) # tool response to send
-        # cache the last message (tool)
-        opt_messages[-1]["cache_control"] = {"type": "ephemeral"}
+
+        if self._supports_explicit_caching():
+            opt_messages[-1]["cache_control"] = {"type": "ephemeral"}
         
         self.logger.debug(f"Messages optimized ({len(self.messages)} -> {len(opt_messages)})")
         
@@ -423,19 +458,22 @@ class CoqChatSession:
             "total_prompt_tokens": self.total_prompt_tokens,
             "total_completion_tokens": self.total_completion_tokens,
             "total_cached_tokens": self.total_cached_tokens,
+            "total_cache_creation_tokens": self.total_cache_creation_tokens,
             "total_tokens": self.total_prompt_tokens + self.total_completion_tokens,
+            "total_cost_usd": self.total_cost,
             "api_calls": self.api_call_count
         }
     
 
 class ContextManager:
     def __init__(
-        self, 
-        coq_interface, 
-        model=None, 
-        temperature=0, 
-        api_key=None, 
-        max_tokens=15000, 
+        self,
+        coq_interface,
+        model=None,
+        temperature=0,
+        api_key=None,
+        api_base=None,
+        max_tokens=15000,
         timeout=30,
         history_file="tactic_history.json",
         enable_history_context: bool = True,
@@ -447,11 +485,11 @@ class ContextManager:
     ):
         self.coq = coq_interface
         self.logger = setup_logger("ContextManager")
-        self.model = model or os.getenv("OPENAI_MODEL", "gpt-4.1")
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
-        if not self.api_key:
-            self.logger.error(f"❌ API key not found. Please set OPENAI_API_KEY env var.")
-            exit(1)
+        # LiteLLM reads provider API keys from env vars automatically
+        # (OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, etc.)
+        self.model = model or os.getenv("LLM_MODEL", "openai/gpt-4.1")
+        self.api_key = api_key
+        self.api_base = api_base
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.timeout = timeout
@@ -463,20 +501,21 @@ class ContextManager:
         self.current_step = 0
         self.proof_plan = proof_plan
         self.enable_local_session_caching = enable_local_session_caching
-        
-        # Initialize context search 
+
+        # Initialize context search
         try:
             self.context_search = ContextSearch(coq_interface, history_file)
             self.logger.info(f"✅ Context search initialized successfully")
         except Exception as e:
             self.logger.warning(f"⚠️  Failed to initialize context search: {e}")
             self.context_search = None
-        
+
         # Initialize chat session with LLM
         self.chat_session = CoqChatSession(
             model=model,
             temperature=temperature,
             api_key=api_key,
+            api_base=api_base,
             max_tokens=max_tokens,
             timeout=timeout,
             enable_context_search=self.enable_context_search,
@@ -484,7 +523,7 @@ class ContextManager:
             enable_caching=self.enable_caching,
             enable_local_session_caching=self.enable_local_session_caching
         )
-        self.logger.info(f"🤖 Chat session initialized with model: {model}")
+        self.logger.info(f"🤖 Chat session initialized with model: {self.chat_session.model}")
          
     def build_initial_prompt(self, proof_tree_str: str) -> str:
         prompt = "Given the following context, choose the best function call to help complete the proof.\n\n"
@@ -587,7 +626,7 @@ class ContextManager:
                 self.logger.error(f"❌ LLM error: {str(llm_result)}")
                 err_response = llm_result.get("error")
                 if err_response.startswith("Error code: 400"):
-                    # This is to retry the request denied by safety policy. Example:
+                    # This is to retry the request denied by OpenAI safety policy. Example:
                     # Error code: 400 - {'error': {'message': 'Invalid prompt: your prompt was flagged as potentially violating our usage policy. Please try again with a different prompt: https://platform.openai.com/docs/guides/reasoning#advice-on-prompting', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_prompt'}}
                     llm_result = self.chat_session.send_message(context_prompt, role="retry", tool_call_id=None, should_optimize=False)
                     invalid_error_count += 1
