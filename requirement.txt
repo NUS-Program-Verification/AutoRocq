@@ -1,6 +1,6 @@
 packaging
 pytest
-openai
+litellm
 graphviz
 tiktoken
 numpy
