@@ -132,11 +132,11 @@ class TacticHistoryManager:
             return f"{tactic}|||{hash(goals_before)}|||{hash(goals_after)}"
 
     def add_successful_tactic(
-        self,
-        tactic: str,
-        goals_before: str,
-        goals_after: str,
-        theorem_name: str,
+        self, 
+        tactic: str, 
+        goals_before: str, 
+        goals_after: str, 
+        theorem_name: str, 
         hypotheses_before: str = "",
         hypotheses_after: str = "",
         step_number: int = None,

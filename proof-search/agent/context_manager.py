@@ -569,7 +569,7 @@ class ContextManager:
         return tool_response
     
     def handle_query_call(self, query_content: str, tool_call_id: str) -> str:
-
+        
         if not self.enable_context_search:
             return "No results found: 'query' tool not available."
 
@@ -589,7 +589,7 @@ class ContextManager:
         )
         if not success:
             tool_response += "\nYou may consider using a different query."
-
+        
         return tool_response
 
     def get_tactic(self, tactic_content: str, tool_call_id: str) -> str:
