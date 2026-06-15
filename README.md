@@ -1,10 +1,11 @@
 # AutoRocq: Agentic Theorem Prover for Verification
 
-[License: GPL v3](https://www.gnu.org/licenses/gpl-3.0.en.html) [License: Commercial](LICENSE) [Discord](https://discord.gg/HfS2zcMzhS)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0.en.html) [![License: Commercial](https://img.shields.io/badge/License-Commercial-green.svg)](LICENSE) [![Discord](https://img.shields.io/badge/Discord-Join%20Server-5865F2?logo=discord&logoColor=white)](https://discord.gg/HfS2zcMzhS)
 
 **Paper**: [FSE 2026](https://arxiv.org/abs/2511.17330)
 
 ---
+
 
 This repository contains the source code of AutoRocq, an agent prover in Rocq (formerly Coq) 8.18.0.
 
@@ -30,6 +31,10 @@ where the LLM interacts with the Rocq proof assistant (via [CoqPyt](https://gith
 
 AutoRocq now supports your favorite model through LiteLLM! See the supported model [list](https://models.litellm.ai) and [configuration](proof-search/configs/readme.md).
 
+#### Interactive REPL
+
+AutoRocq now supports [interactive mode](#interactive-mode), where you can *co-develop* a proof with the agent, monitoring progress and providing hints in real time with the built-in [shell](#repl-commands).
+
 ---
 
 ### Directory Structure
@@ -49,7 +54,8 @@ proof-search/                      # Directory of proof agent src
 │   ├── context_manager.py         # LLM interaction and context management
 │   ├── context_search.py          # Local context search
 │   ├── history_recorder.py        # Manages proof histories
-│   └── proof_tree.py              # Manages proof tree
+│   ├── proof_tree.py              # Manages proof tree
+│   └── interactive_session.py     # Interactive REPL loop
 ├── backend/                       # Interface with CoqPyt
 ├── coqpyt/                        # Interact with Coq
 └── utils/                         # Helper functions
@@ -67,7 +73,7 @@ scripts/                           # Directory of scripts
 pip install -r requirement.txt
 ```
 
-1. Install dependencies in opam
+2. Install dependencies in opam
 
 ```bash
 opam switch import deps.opam
@@ -84,12 +90,10 @@ python3 -m main examples/example.v --config ./configs/minimal.json
 ```
 
 If AutoRocq runs successfully, you will be able to see in the terminal
-
 ```
 [INFO] [Main]: 🎉 Proof completed successfully!
 ```
-
-and the proof script is saved in the same `[example.v](proof-search/examples/example.v)` file. You will also be able to find saved proof states and aggregated results at `data/`, which can be reused to prove other goals in the future.
+and the proof script is saved in the same [`example.v`](proof-search/examples/example.v) file. You will also be able to find saved proof states and aggregated results at `data/`, which can be reused to prove other goals in the future.
 
 For more configurations of the tool, check out the [readme](proof-search/configs/readme.md) or run with `--help` for more options.
 
@@ -106,14 +110,15 @@ To test on this benchmark:
 git submodule update --init --recursive
 ```
 
-1. Compile `libautorocq` by running
+2. Compile `libautorocq` by running
 
 ```bash
 cd AutoRocq-bench/libautorocq; make
 ```
 
-1. Configure `library_paths` in `proof-search/configs/default_config.json` to point to `libautorocq`.
-2. Run the agent by pointing to the target `.v` file. The first run may take a few minutes to initialize the library.
+3. Configure `library_paths` in `proof-search/configs/default_config.json` to point to `libautorocq`.
+
+4. Run the agent by pointing to the target `.v` file. The first run may take a few minutes to initialize the library.
 
 For example, go to `proof-search` directory and run:
 
@@ -150,7 +155,7 @@ Or enable it permanently in your config:
 - **Adding hints for agent** — You can add natural language `hint` to guide AutoRocq's proof strategy.
 - **Co-writing proofs** — you can directly add `tactic`, print `tree`, run `search`, or `rollback` as you wish. Existing proof steps and manual edits are preserved, AutoRocq picks up exactly where you left.
 
-**REPL commands**
+#### REPL commands
 
 | Command        | Description                                                                                                                                                                                     |
 | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -170,7 +175,10 @@ Or enable it permanently in your config:
 
 ### Replicating Results from Paper
 
-**Reproducing Figures**
+<details> 
+<summary><b>Reproducing Figures</b></summary>
+
+<br>
 
 - Figure 3
 
@@ -193,10 +201,16 @@ python3 scripts/analyze/draw_results.py \
 ```bash
 python3 scripts/analyze/plot_searches.py
 ```
+</details> 
 
-**Setting Up Comparison Tools**
+<details> 
+<summary><b>Setting Up Comparison Tools</b></summary>
+
+<br>
 
 Coming soon...
+
+</details>
 
 ---
 
