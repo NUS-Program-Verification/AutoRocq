@@ -2,7 +2,7 @@
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0.en.html) [![License: Commercial](https://img.shields.io/badge/License-Commercial-green.svg)](LICENSE) [![Discord](https://img.shields.io/badge/Discord-Join%20Server-5865F2?logo=discord&logoColor=white)](https://discord.gg/HfS2zcMzhS)
 
-**Paper**: [FSE 2026](https://arxiv.org/abs/2511.17330)
+**Paper**: [FSE 2026](https://dl.acm.org/doi/10.1145/3808164)
 
 ---
 
@@ -224,11 +224,15 @@ If you use our work for academic research, please cite our paper:
 @article{autorocq,
   title={Agentic Verification of Software Systems},
   author={Tu, Haoxin and Zhao, Huan and Song, Yahui and Zafar, Mehtab and Meng, Ruijie and Roychoudhury, Abhik},
-  journal={Proceedings of the ACM on Software Engineering},
-  volume={1},
-  number={FSE},
-  year={2026},
-  publisher={ACM New York, NY, USA}
+  year = {2026},
+  issue_date = {July 2026},
+  publisher = {Association for Computing Machinery},
+  address = {New York, NY, USA},
+  volume = {3},
+  number = {FSE},
+  url = {https://doi.org/10.1145/3808164},
+  doi = {10.1145/3808164},
+  journal = {Proc. ACM Softw. Eng.}
 }
 ```
 
