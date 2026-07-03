@@ -31,6 +31,10 @@ where the LLM interacts with the Rocq proof assistant (via [CoqPyt](https://gith
 
 AutoRocq now supports your favorite model through LiteLLM! See the supported model [list](https://models.litellm.ai) and [configuration](proof-search/configs/readme.md).
 
+#### Interactive REPL
+
+AutoRocq now supports [interactive mode](#interactive-mode), where you can *co-develop* a proof with the agent, monitoring progress and providing hints in real time with the built-in [shell](#repl-commands).
+
 ---
 
 ### Directory Structure
@@ -50,7 +54,8 @@ proof-search/                      # Directory of proof agent src
 │   ├── context_manager.py         # LLM interaction and context management
 │   ├── context_search.py          # Local context search
 │   ├── history_recorder.py        # Manages proof histories
-│   └── proof_tree.py              # Manages proof tree
+│   ├── proof_tree.py              # Manages proof tree
+│   └── interactive_session.py     # Interactive REPL loop
 ├── backend/                       # Interface with CoqPyt
 ├── coqpyt/                        # Interact with Coq
 └── utils/                         # Helper functions
@@ -123,6 +128,51 @@ python3 -m main examples/main_assert_rte_signed_overflow.v --config ./configs/de
 
 ---
 
+### Interactive Mode
+
+In addition to running AutoRocq in a hands-off style, you can *co-develop* Rocq proofs with the agent in interactive mode.
+The agent exposes a REPL where you can steer, inspect, and contribute tactics alongside the LLM.
+
+**Starting interactive mode** — pass `--interactive` (or `-i`) on the command line:
+
+```bash
+python3 -m main examples/example.v --config ./configs/minimal.json --interactive
+```
+
+Or enable it permanently in your config:
+
+```json
+{
+  "interactive": {
+    "enabled": true
+  }
+}
+```
+
+**What interactive mode does**
+
+- **Stepping through proofs** — you can step through AutoRocq's generation and understand its trajectory.
+- **Adding hints for agent** — You can add natural language `hint` to guide AutoRocq's proof strategy.
+- **Co-writing proofs** — you can directly add `tactic`, print `tree`, run `search`, or `rollback` as you wish. Existing proof steps and manual edits are preserved, AutoRocq picks up exactly where you left.
+
+#### REPL commands
+
+| Command        | Description                                                                                                                                                                                     |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `step`         | Agent takes one action (tactic attempt or rollback), then pauses                                                                                                                                |
+| `run`          | Agent runs until the focused goal changes, the agent rolls back, or the proof completes. Failed tactics are handled internally and do not stop `run`                                            |
+| `tactic <tac>` | Apply a Rocq tactic directly (bypasses the LLM). Example: `tactic intros n.`                                                                                                                    |
+| `hint <text>`  | Inject a natural-language hint into the agent's next prompt. Example: `hint try induction on n`                                                                                                 |
+| `rollback [n]` | Undo the last `n` applied tactics (default 1), regardless of whether they were applied by you or the agent. If `n` exceeds the number of applied tactics, rolls back to `Proof.` with a warning |
+| `search <cmd>` | Run a Rocq query and print the results (display-only; does not inject into LLM context). Examples: `search Search Z.add`, `search Print Z.add_comm`, `search Check Z.add`                       |
+| `status`       | Display the current proof goal and hypotheses                                                                                                                                                   |
+| `explain`      | Show agent reasoning history                                                                                                                                                                    |
+| `tree`         | Display the current proof tree with tactic history                                                                                                                                              |
+| `help`         | Print all available commands                                                                                                                                                                    |
+| `quit`         | Exit the session                                                                                                                                                                                |
+
+---
+
 ### Replicating Results from Paper
 
 <details> 
@@ -181,3 +231,4 @@ If you use our work for academic research, please cite our paper:
   publisher={ACM New York, NY, USA}
 }
 ```
+

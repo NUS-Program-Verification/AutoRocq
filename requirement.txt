@@ -10,3 +10,4 @@ matplotlib
 seaborn
 scipy
 venn
+rich

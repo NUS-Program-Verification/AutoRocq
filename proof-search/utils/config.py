@@ -31,10 +31,16 @@ class CoqConfig:
     # Additional options to add to _CoqProject (e.g., ["-arg", "-impredicative-set"])
 
 @dataclass
+class InteractiveConfig:
+    """Configuration for interactive co-development mode."""
+    enabled: bool = False
+
+@dataclass
 class ProofAgentConfig:
     """Main configuration for the proof agent."""
     llm: LLMConfig
     coq: CoqConfig
+    interactive: InteractiveConfig = field(default_factory=InteractiveConfig)
 
     # General settings
     log_level: str = "INFO"
@@ -70,6 +76,7 @@ class ProofAgentConfig:
         return cls(
             llm=LLMConfig(**config_dict.get('llm', {})),
             coq=CoqConfig(**config_dict.get('coq', {})),
+            interactive=InteractiveConfig(**config_dict.get('interactive', {})),
             log_level=config_dict.get("log_level", "INFO"),
             log_file=config_dict.get("log_file"),
             output_dir=config_dict.get("output_dir"),

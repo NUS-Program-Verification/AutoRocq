@@ -5,9 +5,11 @@ from typing import Dict, Optional, Any, List
 from backend.coq_interface import CoqInterface
 from agent.context_manager import ContextManager
 from agent.proof_tree import ProofTree
+from agent import visualizer
 from utils.recorder import create_proof_recorder
 from utils.logger import clean_ansi_codes, setup_logger
 from utils.coq_utils import hints_from_error, goal_diff
+from utils.config import InteractiveConfig
 
 class ProofController:
     """
@@ -26,7 +28,8 @@ class ProofController:
         enable_hammer: bool = False,
         max_context_search: int = 3,
         history_file: str = "tactic_history.json",
-        recording_output_dir: str = "data/statistics"
+        recording_output_dir: str = "data/statistics",
+        interactive: Optional[InteractiveConfig] = None
     ):
         
         self.steps_since_restart = 0
@@ -45,18 +48,25 @@ class ProofController:
         
         self.is_successful = False
         self.give_up = False
-        
+
         self.proof_tree = None
+
+        # Interactive mode
+        self.interactive = interactive or InteractiveConfig()
 
         self.max_steps = max_steps
         self.max_errors = max_errors
-        
+
         # Initialize counters and history
         self.global_step_id = 0         # Global ID for tool call / proof step
         self.gen_step_count = 0         # Global step count for tactic / HL / rollback
         self.successful_tactics = []    # Global successful tactics
         self.failed_tactics = []        # Global failed tactics
         self.query_commands = []        # Global query commands
+
+        # Interactive session state
+        self._pending_hints: List[str] = []        # User hints to inject into next prompt
+        self._tactics_with_states: List[Dict] = [] # All applied tactics (user + agent); source field distinguishes them
         
         # Initialize proof recorder
         self.enable_recording = enable_recording
@@ -198,206 +208,207 @@ class ProofController:
     ##  Proof methods  ##
     #####################
 
-    def prove_theorem(self, theorem_name: str = None) -> bool:
-        
-        """Main entry point for proof generation."""
-        
-        ####################
-        ## Initialization ##
-        ####################
+    def _init_proof_session(self, theorem_name: str = None) -> bool:
+        """
+        Initialize all state for a new proof attempt.
+        Called by both prove_theorem() and InteractiveSessionManager.
+        Returns False if initialization fails (e.g., no unproven proof found).
+        """
         self.current_theorem_name = theorem_name or 'unnamed'
         self.logger.info(f"🚀 Starting proof for: {self.current_theorem_name}")
         self.logger.info(f"⚙️  Max steps: {self.max_steps}")
-
-        proof_file_dir = str(Path(self.coq.file_path).parent)
-        prefix = self.current_theorem_name + "_"
 
         # Start recording
         if self.enable_recording and self.recorder:
             try:
                 proof_file = self.coq.proof_file
                 if proof_file is None:
-                    self.logger.error("proof_file is None")
                     raise ValueError("No proof file available")
                 self.recorder.start_proof_recording(
                     proof_file=proof_file,
                     theorem_name=self.current_theorem_name,
-                    metadata={
-                        'max_steps': self.max_steps,
-                        'controller_version': '1.0'
-                    }
+                    metadata={'max_steps': self.max_steps, 'controller_version': '1.0'}
                 )
             except Exception as e:
                 self.logger.error(f"❌ Failed to start proof recording: {e}")
 
-        # Reset counters and tracking lists
+        # Reset counters
         self.is_successful = False
+        self.give_up = False
         self.global_step_id = 0
         self.gen_step_count = 0
         self.successful_tactics = []
         self.failed_tactics = []
         self.query_commands = []
+        self._pending_hints = []
+        self._tactics_with_states = []
 
-        # Check if we have an unproven proof
+        # Check for unproven proof
         unproven_proof = self.coq.get_unproven_proof()
         if not unproven_proof:
             self.logger.error("❌ No unproven proof available")
             return False
-        
-        # Initialize proof tree
-        self.proof_tree = ProofTree()
-        self.logger.info("🌳 Initialized new ProofTree")
 
-        # Show initial goals
-        initial_goals = self.coq.get_goal_str()
-        self.logger.info(f"🎯 Initial goals: {initial_goals}")
-        
-        # Add initial root node to the proof tree
-        if not self.proof_tree.root:
-            initial_hypotheses = self.coq.get_hypothesis()
-            self.proof_tree.add_node(
-                tactic="Proof.",
-                goals_before=initial_goals.strip() if initial_goals else '',
-                goals_after=initial_goals.strip() if initial_goals else '',
-                hypotheses_before=initial_hypotheses.strip() if initial_hypotheses else '',
-                hypotheses_after=initial_hypotheses.strip() if initial_hypotheses else '',
-                step_number=0,
-                subgoals_after=self.coq.get_subgoals()
-            )
+        self._init_proof_tree()
+        self.logger.info("🌳 Initialized new ProofTree")
 
         if self.enable_recording and self.recorder:
             self.recorder.start_proving_time()
-        
-        #####################
-        ## Main agent loop ##
-        #####################
-        tactics_with_states = self.main_loop()
-        
-        #####################
-        ##  Final results  ##
-        #####################
-        completion_message = "Proof completed" if self.is_successful \
-                        else "Max steps reached" if self.gen_step_count >= self.max_steps \
-                        else "Proof aborted" if self.give_up \
-                        else "Unable to proceed"
 
-        # Update history with successful proof
+        return True
+
+    def _finish_proof(self, tactics_with_states: List[Dict[str, Any]]):
+        """
+        Finalize a proof attempt: record history, save tree, end recording.
+        Called by prove_theorem() and InteractiveSessionManager.
+        """
+        proof_file_dir = str(Path(self.coq.file_path).parent)
+        prefix = self.current_theorem_name + "_"
+
+        completion_message = (
+            "Proof completed" if self.is_successful
+            else "Max steps reached" if self.gen_step_count >= self.max_steps
+            else "Proof aborted" if self.give_up
+            else "Unable to proceed"
+        )
+
         if self.is_successful:
             self.logger.info(f"🔍 Recording successful proof with {len(tactics_with_states)} tactics")
             self._record_successful_proof(tactics_with_states)
-        
+
         self.proof_tree.save_to_png(str(Path(proof_file_dir) / "proof_tree_final"), prefix=prefix)
         self.proof_tree.save_to_json(str(Path(proof_file_dir) / "proof_tree_final.json"), prefix=prefix)
 
         if self.enable_recording and self.recorder:
             try:
-                final_stats = {
-                    'successful_tactics': len(self.successful_tactics),
-                    'failed_tactics': len(self.failed_tactics),
-                    'query_commands': len(self.query_commands),
-                    'steps_taken': self.global_step_id,
-                    'steps_to_completion': self.gen_step_count if self.is_successful else None,
-                    'successful_tactics_list': self.successful_tactics,  # List of tactics
-                    'query_commands_list': self.query_commands,          # List of queries
-                }
                 self.recorder.end_proof_recording(
                     success=self.is_successful,
                     message=completion_message,
-                    final_stats=final_stats
+                    final_stats={
+                        'successful_tactics': len(self.successful_tactics),
+                        'failed_tactics': len(self.failed_tactics),
+                        'query_commands': len(self.query_commands),
+                        'steps_taken': self.global_step_id,
+                        'steps_to_completion': self.gen_step_count if self.is_successful else None,
+                        'successful_tactics_list': self.successful_tactics,
+                        'query_commands_list': self.query_commands,
+                    }
                 )
             except Exception as e:
                 self.logger.error(f"❌ Failed to end proof recording: {e}")
-        
+
+
+    def prove_theorem(self, theorem_name: str = None) -> bool:
+        """Main entry point for autonomous proof generation."""
+        if not self._init_proof_session(theorem_name):
+            return False
+
+        tactics_with_states = self.main_loop()
+
+        self._finish_proof(tactics_with_states)
         return self.is_successful
 
 
     def main_loop(self) -> List[Dict[str, Any]]:
         """
-        Main agent loop. Continuously handles LLM tools with feedback.
-        Returns a list of successful tactics with states.
+        Main agent loop for autonomous (non-interactive) mode.
+        Drives step_generator() to completion and returns the accumulated tactics.
         """
-        
-        # Currently applied tactics: to be returned by the function
-        # Tactics are appended on successes and erased on rollback
-        successful_tactics_with_states = []
-        
-        # Error tracking variables:
-        # reset on successful tactic / rollback
+        for _ in self.step_generator():
+            pass
+        return self._tactics_with_states
+
+
+    def step_generator(self):
+        """
+        Generator version of the agent loop. Yields a result dict after each
+        tactic attempt or rollback. Plans and queries are executed transparently.
+
+        Yield format:
+          {'type': 'tactic', 'tactic': str, 'success': bool, 'error': str|None,
+           'goals_after': str, 'proof_complete': bool}
+          {'type': 'rollback', 'success': bool, 'distance': int}
+          {'type': 'done', 'success': bool}
+
+        Requires _init_proof_session() to have been called first.
+        self._tactics_with_states is updated in-place so callers always see current state.
+        """
+        # self._tactics_with_states holds all applied tactics (user + agent, in order).
+        # source field on each entry distinguishes them. Using an instance variable
+        # means external user rollback is visible when the generator resumes.
+
         consecutive_queries = 0
         consecutive_errors = 0
         error_tactics = []
-        
+
         def _clear_error_tracking():
             nonlocal consecutive_queries, consecutive_errors, error_tactics
             consecutive_queries = 0
             consecutive_errors = 0
             error_tactics.clear()
-        
-        # Main variables for LLM prompt construction
+
         tool_call_id = None
-        last_tool_success = False # last action was successful
-        role = "user" # initial USER prompt -> TOOL responses
+        last_tool_success = False
+        role = "user"
         proof_tree_str = self.proof_tree.get_proof_tree_string()
         prompt = self.context_manager.build_initial_prompt(proof_tree_str)
-        
-        while self.gen_step_count < self.max_steps:
 
-            # cleanup disabled for short proofs
-            # TODO: better context and state management
-            # self._check_for_cleanup()
-            
-            # Early exit if global_step_id becomes too large
+        while self.gen_step_count < self.max_steps:
             if self.global_step_id > self.max_steps * (self.max_context_search + 1):
-                self.gen_step_count = self.max_steps # so that proof completion message is "Max steps reached"
+                self.gen_step_count = self.max_steps  # so that proof completion message is "Max steps reached"
                 self.logger.info(f"\n{'='*60}\n📊 [PROOF STEP {self.global_step_id}] {self.gen_step_count}/{self.max_steps}. Exiting...")
                 break
-            
+
+            # Inject pending user hints
+            if self._pending_hints:
+                hints_text = "\n".join(f"- {h}" for h in self._pending_hints)
+                prompt += f"\n\n## USER GUIDANCE:\n{hints_text}\n"
+                self._pending_hints.clear()
+
             self.steps_since_restart += 1
             self.global_step_id += 1
             self.logger.info(f"\n{'='*60}\n📊 [PROOF STEP {self.global_step_id}] {self.gen_step_count}/{self.max_steps}\n{'='*60}")
 
             proof_state = self._build_proof_state()
-            current_goals = proof_state.get('goals', '')
-            
-            # Sanity check: coq file is consistent with the proof state
-            current_step_count = len(successful_tactics_with_states)
+
+            current_step_count = len(self._tactics_with_states)
             current_step_count_coq = len(self.coq.proof.steps) if self.coq.proof.steps else 0
-            self.logger.debug(f"Step count: state={current_step_count}, coq_file={current_step_count_coq}")
-            if current_step_count + 1 != current_step_count_coq: # +1 because of 'Proof.'
-                self.logger.error(f"Error: Step count mismatch! Exiting early...")
-                exit(1) # Fail fast
-            
+            expected_coq_steps = current_step_count + 1  # +1 for Proof.
+            self.logger.debug(f"Step count: total={current_step_count}, coq_file={current_step_count_coq}")
+            if expected_coq_steps != current_step_count_coq:
+                self.logger.error(f"Error: Step count mismatch! expected={expected_coq_steps} != coq={current_step_count_coq}. Exiting early...")
+                exit(1)
+
             decision, tool_call_id = self.context_manager.get_action(prompt, role=role, tool_call_id=tool_call_id, tool_success=last_tool_success)
-            
-            # Handle case where decision parsing failed
+
             if decision is None:
                 self.logger.error(f"❌ Step {self.global_step_id}: Failed to parse LLM decision. Skipping step.")
-                prompt = "Failed to parse your response. Please ensure you're calling one of the available functions (plan, query, tactic, or rollback) with valid JSON arguments."
+                prompt = "Failed to parse your response. Please ensure you're calling one of the available functions."
                 tool_call_id = None
-                role = "user" # fallback to user prompt and retry
+                role = "user"
                 consecutive_errors += 1
                 if consecutive_errors > self.max_errors:
                     self.logger.error(f"❌ Step {self.global_step_id}: LLM call failed. Exiting...")
                     self.logger.debug(f"Last few messages: {self.context_manager.chat_session.messages[-5:]}")
-                    return []
-                else:
-                    continue
-            
+                    break
+                continue
+
             decision_type = decision.get('type')
             decision_content = decision.get('content')
-            
             role = "tool"
-            last_tool_success = False # reset for the next tool call
-            
+            last_tool_success = False
+
             if decision_type == 'plan':
                 last_tool_success = True
                 prompt = self.context_manager.handle_plan_call(decision_content, tool_call_id)
+                print(visualizer.render_action('plan', decision_content))
                 if self.context_manager.should_give_up():
                     self.logger.warning(f"⚠️  Step {self.global_step_id}: PROOF UNPROVABLE -- giving up!")
                     self.give_up = True
-                    return []
+                    break
                 self.logger.info(f"✅ Step {self.global_step_id}: PLAN FUNCTION CALLED!")
-            
+                continue  # plan is transparent
+
             elif decision_type == 'query':
                 consecutive_queries += 1
                 if consecutive_queries > self.max_context_search:
@@ -408,76 +419,63 @@ class ProofController:
                     prompt = "You have just queried this information. Please provide a different query."
                     self.logger.info(f"⚠️  Step {self.global_step_id}: REPEATED QUERY -- skipped!")
                     continue
-                
-                # 'query' is NEVER cached, so never considered successful
-                
                 self.query_commands.append(decision_content)
                 prompt = self.context_manager.handle_query_call(decision_content, tool_call_id)
-                
+                print(visualizer.render_action('query', decision_content))
                 if consecutive_queries == self.max_context_search:
-                    prompt += "\n\n"
-                    prompt += "You have hit the maximum number of 'query' calls. Please proceed with the current information until a successful 'tactic', or 'rollback' is applied."
-
-                
+                    prompt += "\n\nYou have hit the maximum number of 'query' calls. Please proceed with the current information until a successful 'tactic', or 'rollback' is applied."
                 self.logger.info(f"✅ Step {self.global_step_id}: QUERY success: {decision_content}")
-                continue
-            
+                continue  # query is transparent
+
             elif decision_type == 'rollback':
                 rollback_data = decision_content
                 rollback_reason = rollback_data.get('reason', 'No reason provided')
-                rollback_steps = rollback_data.get('steps', 1)  # Default to 1 step
-                
-                self.gen_step_count += 1 # Update generation step count
-                
+                rollback_steps = rollback_data.get('steps', 1)
+                self.gen_step_count += 1
                 self.logger.info(f"🔄 Step {self.global_step_id}: ROLLBACK {rollback_steps} step{'s' if rollback_steps != 1 else ''}: {rollback_reason}")
-                
-                # Execute rollback
+
+                agent_only = [t for t in self._tactics_with_states if t.get('source') != 'user']
                 rollback_result = self._execute_rollback(
-                    successful_tactics_with_states, 
-                    rollback_reason, 
-                    proof_tree_str,
-                    rb_steps=rollback_steps
+                    agent_only, rollback_reason, proof_tree_str, rb_steps=rollback_steps
                 )
-                
+
                 if rollback_result['success']:
-                    target_index = rollback_result['target_index']  # Index for list slicing
-                    target_step_number = rollback_result['target_step_number']  # Actual step number
+                    target_index = rollback_result['target_index']
+                    target_step_number = rollback_result['target_step_number']
                     rollback_distance = rollback_result['rollback_distance']
-                    
-                    # Update successful_tactics_with_states to match rollback (use index)
-                    successful_tactics_with_states = successful_tactics_with_states[:target_index]
-                    
+                    # Keep tactics at or before the target step number
+                    if target_index > 0:
+                        self._tactics_with_states[:] = [t for t in self._tactics_with_states
+                                                        if t['step_number'] <= target_step_number]
+                    else:
+                        self._tactics_with_states[:] = []
                     last_tool_success = True
                     _clear_error_tracking()
-                    
-                    # Update proof tree string
                     proof_tree_str = self.proof_tree.get_proof_tree_string()
-                    
                     self.logger.info(f"✅ Rollback successful: {rollback_distance} step{'s' if rollback_distance != 1 else ''} back to index {target_index} (step_number {target_step_number})")
-                    
-                    prompt = f"Rollback completed successfully. Returned {rollback_distance} step{'s' if rollback_distance != 1 else ''} back to step {target_step_number}.\n\n"
-                    prompt += "## CURRENT PROOF TREE:\n"
-                    prompt += f"{proof_tree_str}\n\n"
-                    prompt += "Now consider a different approach to complete the proof. Update the plan if needed. Avoid repeating the same tactics that led to this rollback."
+                    print(visualizer.render_action('rollback', rollback_data))
+                    prompt = (
+                        f"Rollback completed successfully. Returned {rollback_distance} step{'s' if rollback_distance != 1 else ''} back to step {target_step_number}.\n\n"
+                        f"## CURRENT PROOF TREE:\n{proof_tree_str}\n\n"
+                        "Now consider a different approach to complete the proof. Update the plan if needed. Avoid repeating the same tactics that led to this rollback."
+                    )
+                    yield {'type': 'rollback', 'success': True, 'distance': rollback_distance}
                 else:
                     prompt = f"Rollback failed: {rollback_result.get('message', 'Unknown error')}\nPlease continue with tactics."
                     self.logger.error(f"❌ Rollback failed: {rollback_result.get('message')}")
-                
+                    yield {'type': 'rollback', 'success': False, 'distance': 0}
                 continue
-            
+
             elif decision_type == 'tactic':
-                
-                self.gen_step_count += 1 # Update generation step count
-                
+                self.gen_step_count += 1
                 tactic_content = self.context_manager.get_tactic(decision_content, tool_call_id)
-                
-                # Check if a query is supplied as tactic
+
                 if tactic_content.startswith(("Search", "Print", "Check", "About")):
                     prompt = f"You have supplied a 'query' as a 'tactic'. Please call the 'query' tool instead.\n"
                     prompt += self.context_manager.handle_query_call(decision_content, tool_call_id)
                     self.logger.info(f"⚠️  Step {self.global_step_id}: QUERY AS TACTIC!")
                     self.query_commands.append(decision_content)
-                    self.gen_step_count -= 1 # undo the increment
+                    self.gen_step_count -= 1
                     consecutive_queries += 1
                     consecutive_errors += 1
                     continue
@@ -486,134 +484,124 @@ class ProofController:
                 if tactic_content in ["Abort.", "abort.", ]:
                     self.logger.warning(f"⚠️  Step {self.global_step_id}: ABORTING PROOF -- giving up!")
                     self.give_up = True
-                    return []
+                    break
 
-                # Disallow certain tactics
-                if tactic_content in ["Admitted.", "admit.", ]:
+                if tactic_content in ["Admitted.", "admit."]:
                     prompt = "Tactic not allowed. Suggest a *different* tactic.\n"
                     prompt += "If some errors persist, you may consider (1) reviewing your plan, (2) searching/querying for relevant terms, or (3) rolling back to an earlier state."
                     self.logger.info(f"⚠️  Step {self.global_step_id}: ADMITTED TACTIC -- skipped!")
                     consecutive_errors += 1
+                    yield {'type': 'tactic', 'tactic': tactic_content, 'success': False,
+                           'error': 'Admitted not allowed', 'goals_after': '', 'proof_complete': False}
                     continue
-                
-                # Repeating failed tactics
+
                 if tactic_content in error_tactics:
                     prompt = "This tactic has been tried and failed. Suggest a *different* tactic.\n"
                     prompt += "If some errors persist, you may consider (1) reviewing your plan, (2) searching/querying for relevant terms, or (3) rolling back to an earlier state."
                     self.logger.info(f"⚠️  Step {self.global_step_id}: REPEATING FAILED TACTIC -- skipped!")
                     consecutive_errors += 1
+                    yield {'type': 'tactic', 'tactic': tactic_content, 'success': False,
+                           'error': 'Repeated failed tactic', 'goals_after': '', 'proof_complete': False}
                     continue
-                
-                # Save states before tactic application
+
                 subgoals_before = self.coq.get_subgoals()
                 goals_before = proof_state.get('goals', '').strip()
                 hypotheses_before = proof_state.get('hypotheses', '').strip()
 
-                prompt = "" # reset prompt
+                prompt = ""
                 success = self._apply_tactic(tactic_content)
-                
-                if not success: # Failed tactic application
-                    
-                    failed_tactic = tactic_content
+
+                print(visualizer.render_action('tactic', tactic_content, success))
+
+                if not success:
                     consecutive_errors += 1
-                    error_tactics.append(failed_tactic)
-                    self.failed_tactics.append(failed_tactic)
+                    error_tactics.append(tactic_content)
+                    self.failed_tactics.append(tactic_content)
                     failed_error = self.coq.get_last_error()
                     self.logger.info(f"⚠️  Step {self.global_step_id}: TACTIC APPLICATION failed")
-                    
-                    # If errors persist, try hammer ONCE per proof state
+
                     if consecutive_errors == self.max_errors + 1 and self.enable_hammer:
                         success = self._try_hammer()
-                    
-                    # If still failed, provide feedback and history
+
                     if not success:
-                        # Feedback with error message
-                        prompt += f"Tactic application failed with error: {failed_error}\n" 
-                        prompt += hints_from_error(failed_tactic, failed_error)
-                        
-                        # Add suggestion when errors persist
+                        prompt += f"Tactic application failed with error: {failed_error}\n"
+                        prompt += hints_from_error(tactic_content, failed_error)
                         if consecutive_errors > self.max_errors:
                             prompt += "\nIf errors persist, you may consider using other available tools."
-                        
-                        # Add history feedback
                         prompt += self._provide_history_feedback(consecutive_errors)
-                        
+                        yield {'type': 'tactic', 'tactic': tactic_content, 'success': False,
+                               'error': failed_error, 'goals_after': goals_before, 'proof_complete': False}
                         continue
                     else:
-                        # hammer succeeds, fall through with updated prompt
                         prompt += "Application failed with supplied tactic, but hammer succeeded.\n"
-                
-                assert success, "Unreachable with failed tactic application"
-                
+
+                # Tactic succeeded
                 last_tool_success = True
                 _clear_error_tracking()
-                successful_tactic = tactic_content
-                self.logger.info(f"🏆 Tactic applied: '{successful_tactic}'")
+                self.logger.info(f"🏆 Tactic applied: '{tactic_content}'")
 
-                # Get proof state after tactic application
                 current_goals_after = self.coq.get_goal_str()
                 current_hypotheses_after = self.coq.get_hypothesis()
-                subgoals_after = self.coq.get_subgoals() 
+                subgoals_after = self.coq.get_subgoals()
 
-                # Invoke successful tactic handling routine
                 tactic_with_state = self._handle_successful_tactic(
-                    successful_tactic, 
-                    subgoals_before, subgoals_after,
-                    goals_before, current_goals_after,
-                    hypotheses_before, current_hypotheses_after
+                    tactic_content, subgoals_before, subgoals_after,
+                    goals_before, current_goals_after, hypotheses_before, current_hypotheses_after
                 )
-                successful_tactics_with_states.append(tactic_with_state)
-            
-                # Get proof completion status; apply Qed if proof is complete
-                post_tactic_status = self.coq.get_proof_completion_status()
+                tactic_with_state['source'] = 'agent'
+                self._tactics_with_states.append(tactic_with_state)
 
-                # Case 1: Main proof is complete -> exit
-                if post_tactic_status['is_complete'] and post_tactic_status['qed_already_applied']:                        
+                post_tactic_status = self.coq.get_proof_completion_status()
+                proof_complete = post_tactic_status['is_complete'] and post_tactic_status['qed_already_applied']
+
+                self.logger.info(f"✅ Step {self.global_step_id}: TACTIC APPLIED SUCCESSFULLY!")
+
+                if proof_complete:
                     self.is_successful = True
+                    yield {'type': 'tactic', 'tactic': tactic_content, 'success': True,
+                           'error': None, 'goals_after': '', 'proof_complete': True}
                     break
-                
-                # Case 2: Goal still open -> update proof tree and feedback
                 else:
-                    prompt += f"Tactic '{successful_tactic}' applied successfully.\n\n"
-                    
-                    # ALWAYS update proof tree string
                     proof_tree_str = self.proof_tree.get_proof_tree_string()
-                    
-                    # Only show proof tree if subgoals have been changed
-                    # Convert Goal objects to strings for comparison
-                    def goal_to_str(goal) -> str:
-                        if hasattr(goal, 'ty'):
-                            return str(goal.ty).strip()
-                        elif isinstance(goal, str):
-                            return goal.strip()
-                        else:
-                            return str(goal).strip()
-                    
-                    goals_before_str = goal_to_str(goals_before)
-                    goals_after_str = goal_to_str(current_goals_after)
-                    # subgoals_before_str = "\n".join([goal_to_str(g) for g in subgoals_before])
-                    # subgoals_after_str = "\n".join([goal_to_str(g) for g in subgoals_after])
-                    # self.logger.debug(f"Goals before: {goals_before_str}")
-                    # self.logger.debug(f"Goals after: {goals_after_str}")
-                    # self.logger.debug(f"Subgoals before: {subgoals_before_str}")
-                    # self.logger.debug(f"Subgoals after: {subgoals_after_str}")
-                    
+                    goals_after_str = str(current_goals_after).strip() if current_goals_after else ''
+                    goals_before_str = goals_before
+
+                    prompt += f"Tactic '{tactic_content}' applied successfully.\n\n"
                     if goals_after_str != goals_before_str:
-                        prompt += "## CURRENT PROOF TREE:\n"
-                        prompt += f"{proof_tree_str}\n"
+                        prompt += f"## CURRENT PROOF TREE:\n{proof_tree_str}\n"
                     else:
                         prompt += "Goals: No changes.\n"
-                    
                     prompt += f"Hypotheses: {current_hypotheses_after if current_hypotheses_after else 'None'}\n"
-                
-                self.logger.info(f"✅ Step {self.global_step_id}: TACTIC APPLIED SUCCESSFULLY!")
-            
+
+                    yield {'type': 'tactic', 'tactic': tactic_content, 'success': True,
+                           'error': None, 'goals_after': goals_after_str, 'proof_complete': False}
+
             else:
                 prompt = f"Invalid function call: {decision_type}"
                 self.logger.error(f"❌ Step {self.global_step_id}: INVALID FUNCTION CALL!")
                 continue
-        
-        return successful_tactics_with_states
+
+        yield {'type': 'done', 'success': self.is_successful}
+
+    ############################
+    ##  Proof tree / state   ##
+    ############################
+
+    def _init_proof_tree(self):
+        """Initialize a fresh proof tree with a root node from current Coq state."""
+        self.proof_tree = ProofTree()
+        initial_goals = self.coq.get_goal_str()
+        self.logger.info(f"🎯 Initial goals: {initial_goals}")
+        initial_hypotheses = self.coq.get_hypothesis()
+        self.proof_tree.add_node(
+            tactic="Proof.",
+            goals_before=initial_goals.strip() if initial_goals else '',
+            goals_after=initial_goals.strip() if initial_goals else '',
+            hypotheses_before=initial_hypotheses.strip() if initial_hypotheses else '',
+            hypotheses_after=initial_hypotheses.strip() if initial_hypotheses else '',
+            step_number=0,
+            subgoals_after=self.coq.get_subgoals()
+        )
 
     #####################
     ##  Proof helpers  ##
