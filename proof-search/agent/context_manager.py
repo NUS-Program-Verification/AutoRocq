@@ -12,6 +12,8 @@ from agent.context_search import ContextSearch
 from utils.logger import setup_logger, clean_ansi_codes
 from utils.coq_utils import *
 
+litellm.drop_params = True  # drop unsupported params e.g. temperature
+
 class CoqChatSession:
     """
     A class to manage an OpenAI chat session for Coq proof tactics.
