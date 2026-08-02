@@ -43,7 +43,7 @@ class CoqFile(object):
         timeout: int = 30,
         workspace: Optional[str] = None,
         coq_lsp: str = "coq-lsp",
-        coq_lsp_options: Tuple[str] = None,
+        coq_lsp_options: Optional[Tuple[str, ...]] = None,
         coqtop: str = "coqtop",
     ):
         """Creates a CoqFile.
@@ -76,7 +76,8 @@ class CoqFile(object):
 
         try:
             self.coq_lsp_client.didOpen(TextDocumentItem(uri, "coq", 1, text))
-            ast = self.coq_lsp_client.get_document(TextDocumentIdentifier(uri)).spans
+            document = self.coq_lsp_client.get_document(TextDocumentIdentifier(uri))
+            ast = document.spans if document is not None else []
         except Exception as e:
             self._handle_exception(e)
             raise e
@@ -210,7 +211,8 @@ class CoqFile(object):
         uri = f"file://{self.path}"
         text = self.__read()
         try:
-            ast = self.coq_lsp_client.get_document(TextDocumentIdentifier(uri)).spans
+            document = self.coq_lsp_client.get_document(TextDocumentIdentifier(uri))
+            ast = document.spans if document is not None else []
         except Exception as e:
             self._handle_exception(e)
             raise e

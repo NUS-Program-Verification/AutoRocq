@@ -5,6 +5,7 @@ from coqpyt.coq.exceptions import *
 from coqpyt.coq.structs import TermType
 
 from utility import *
+from utility import SetupProofFile, check_proofs, compare_context
 
 
 class TestProofValidFile(SetupProofFile):
