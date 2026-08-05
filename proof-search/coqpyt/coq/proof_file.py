@@ -364,6 +364,7 @@ class ProofFile(CoqFile):
             coqtop=coqtop,
             coq_lsp_options=coq_lsp_options,
         )
+        workspace = self.workspace
         self.__aux_file = _AuxFile(
             file_path,
             timeout=self.timeout,
@@ -611,6 +612,17 @@ class ProofFile(CoqFile):
         }
     )
 
+    @staticmethod
+    def _is_complete_definition(expr: List) -> bool:
+        return (
+            isinstance(expr, list)
+            and len(expr) > 3
+            and expr[0] == "VernacDefinition"
+            and isinstance(expr[3], list)
+            and len(expr[3]) > 0
+            and expr[3][0] == "DefineBody"
+        )
+
     def __forward_in_proof(self, step: Step) -> bool:
         """Whether `step` should be treated as in-proof for forward execution.
 
@@ -620,7 +632,11 @@ class ProofFile(CoqFile):
         if self.open_proofs:
             return True
         try:
-            if self.context.expr(step)[0] in self._NON_PROOF_VERNAC:
+            expr = self.context.expr(step)
+            if (
+                expr[0] in self._NON_PROOF_VERNAC
+                or self._is_complete_definition(expr)
+            ):
                 return False
         except Exception:
             pass

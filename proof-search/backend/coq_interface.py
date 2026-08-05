@@ -33,7 +33,9 @@ class CoqInterface:
         - auto_setup_coqproject: Whether to automatically create/update _CoqProject
         - coqproject_extra_options: Additional options for _CoqProject
         """
-        self.file_path = file_path
+        self.file_path = os.path.abspath(file_path)
+        if workspace is not None and not os.path.isabs(workspace):
+            workspace = os.path.abspath(workspace)
         self.workspace = workspace
         
         # Library support attributes
@@ -65,6 +67,27 @@ class CoqInterface:
         ]
 
     # Add library setup method
+    @staticmethod
+    def _resolve_library_path(lib_path: str, workspace: Optional[str]) -> str:
+        if not os.path.isabs(lib_path):
+            workspace_dir = workspace or os.getcwd()
+            return os.path.abspath(os.path.join(workspace_dir, lib_path))
+
+        return lib_path
+
+    @staticmethod
+    def _validate_library_path(lib_path: str, lib_name: str):
+        if not os.path.exists(lib_path):
+            raise FileNotFoundError(
+                f"Configured Coq library path for '{lib_name}' does not exist: "
+                f"{lib_path}"
+            )
+        if not os.path.isdir(lib_path):
+            raise NotADirectoryError(
+                f"Configured Coq library path for '{lib_name}' is not a directory: "
+                f"{lib_path}"
+            )
+
     def _setup_coqproject(self):
         """Create or update _CoqProject file with library paths and extra options."""
         try:
@@ -81,9 +104,8 @@ class CoqInterface:
                 lib_name = lib_config["name"]
                 
                 # Ensure we use absolute paths for reliability
-                if not os.path.isabs(lib_path):
-                    workspace_dir = self.workspace or str(Path(self.file_path).parent)
-                    lib_path = os.path.abspath(os.path.join(workspace_dir, lib_path))
+                lib_path = self._resolve_library_path(lib_path, self.workspace)
+                self._validate_library_path(lib_path, lib_name)
                 
                 content_lines.append(f"-R {lib_path} {lib_name}")
                 self.logger.debug(f"  Added library mapping: {lib_path} -> {lib_name}")
