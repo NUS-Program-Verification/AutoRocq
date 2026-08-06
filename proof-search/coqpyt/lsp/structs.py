@@ -697,7 +697,7 @@ class Goal(object):
                 hyp["definition"] = hyp["def"]
                 hyp.pop("def")
         hyps = [Hyp(**hyp) for hyp in goal["hyps"]]
-        ty = None if "ty" not in goal else goal["ty"]
+        ty = "" if "ty" not in goal else goal["ty"]
         return Goal(hyps, ty)
 
     def __repr__(self) -> str:
@@ -753,7 +753,9 @@ class GoalConfig(object):
 
     @staticmethod
     def parse(goal_config: Dict) -> Optional["GoalConfig"]:
-        parse_goals = lambda goals: [Goal.parse(goal) for goal in goals]
+        parse_goals = lambda goals: [
+            goal for goal in (Goal.parse(goal) for goal in goals) if goal is not None
+        ]
         goals = parse_goals(goal_config["goals"])
         stack = [(parse_goals(t[0]), parse_goals(t[1])) for t in goal_config["stack"]]
         bullet = None if "bullet" not in goal_config else goal_config["bullet"]
@@ -763,7 +765,7 @@ class GoalConfig(object):
 
 
 class Message(object):
-    def __init__(self, level, text, range=None):
+    def __init__(self, level, text, range: Optional[Range] = None):
         self.level = level
         self.text = text
         self.range = range
@@ -777,15 +779,15 @@ class GoalAnswer(object):
         messages: List[Message],
         goals: Optional[GoalConfig] = None,
         error: Any = None,
-        program: List = [],
-        range: Range = None,
+        program: Optional[List] = None,
+        range: Optional[Range] = None,
     ):
         self.textDocument = textDocument
         self.position = position
         self.messages = messages
         self.goals = goals
         self.error = error
-        self.program = program
+        self.program = [] if program is None else program
         self.range = range
 
     def __repr__(self):

@@ -13,7 +13,7 @@ class FileContext:
         path: str,
         module: Optional[List[str]] = None,
         coqtop: str = "coqtop",
-        terms: Optional[Dict[str, Term]] = None,
+        terms: Optional[Dict[str, List[Term]]] = None,
     ):
         self.libraries: Dict[str, Dict[str, Term]] = {}
         self.__path = path
@@ -43,12 +43,12 @@ class FileContext:
         # We only tested versions 8.17/8.18/8.19, so we provide no claims about
         # versions prior to that.
 
-    def __init_context(self, terms: Optional[Dict[str, Term]] = None):
+    def __init_context(self, terms: Optional[Dict[str, List[Term]]] = None):
         # NOTE: We use a stack for each term because of the following case:
         # 1) File A imports a file B with term C
         # 2) File A defines a new term C
         self.__terms: Dict[str, List[Term]] = {} if terms is None else terms
-        self.__last_terms: List[Tuple[str, Term]] = []
+        self.__last_terms: List[List[Tuple[str, Term]]] = []
         self.__segments = SegmentStack()
         self.__anonymous_id: Optional[int] = None
 
@@ -172,7 +172,7 @@ class FileContext:
     # Simultaneous definition of terms and notations (where clause)
     # https://coq.inria.fr/refman/user-extensions/syntax-extensions.html#simultaneous-definition-of-terms-and-notations
     def __handle_where_notations(self, step: Step, expr: List, term_type: TermType):
-        spans = []
+        spans: List = []
         if (
             term_type
             in [
@@ -209,7 +209,7 @@ class FileContext:
             self.__add_term(name, step, TermType.NOTATION)
 
     def __is_extend(
-        self, expr: List, entry: str | Tuple[str], exact: bool = True
+        self, expr: List, entry: str | Tuple[str, ...], exact: bool = True
     ) -> bool:
         if expr[0] != "VernacExtend":
             return False
@@ -265,7 +265,8 @@ class FileContext:
     def __get_names(expr: List) -> List[str]:
         inductive = expr[0] == "VernacInductive"
         extend = expr[0] == "VernacExtend"
-        stack, res = expr[:0:-1], []
+        stack: List = expr[:0:-1]
+        res: List[str] = []
         while len(stack) > 0:
             el = stack.pop()
             v = FileContext.__get_v(el)
@@ -544,12 +545,17 @@ class FileContext:
             "VernacBeginSection",
         ]
 
-    def update(self, context: Union["FileContext", Dict[str, Term]] = {}):
+    def update(
+        self, context: Optional[Union["FileContext", Dict[str, Term]]] = None
+    ):
         """Updates the context with new terms.
 
         Args:
             terms (Dict[str, Term]): The new terms to be added.
         """
+        if context is None:
+            return
+
         if isinstance(context, FileContext):
             terms = context.terms
             for library in context.libraries:

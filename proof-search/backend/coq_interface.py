@@ -11,6 +11,14 @@ from pathlib import Path
 from contextlib import contextmanager
 from utils.logger import setup_logger, clean_ansi_codes
 
+
+class CoqSessionDesync(RuntimeError):
+    """Raised when coq-lsp/proof state diverges.
+
+    Propagates as an obligation-level failure so the caller can reset the
+    interface/session explicitly instead of taking a hard process exit.
+    """
+
 class CoqInterface:
     def __init__(self, file_path: str, workspace: Optional[str] = None, 
                  library_paths: Optional[List[Dict[str, str]]] = None,
@@ -25,7 +33,9 @@ class CoqInterface:
         - auto_setup_coqproject: Whether to automatically create/update _CoqProject
         - coqproject_extra_options: Additional options for _CoqProject
         """
-        self.file_path = file_path
+        self.file_path = os.path.abspath(file_path)
+        if workspace is not None and not os.path.isabs(workspace):
+            workspace = os.path.abspath(workspace)
         self.workspace = workspace
         
         # Library support attributes
@@ -38,6 +48,12 @@ class CoqInterface:
         self.proof = None
         self.last_error = None
         self.logger = setup_logger("CoqInterface")
+
+        # Cache for recent goal queries so we avoid back-to-back LSP `proof_goals` calls
+        # when the proof state hasn't changed.
+        self.__goal_cache_key = None
+        self.__cached_goals = None
+        self.__goal_cache_filled = False
         
         # Setup library paths if configured
         if self.auto_setup_coqproject and (self.library_paths or self.coqproject_extra_options):
@@ -51,6 +67,27 @@ class CoqInterface:
         ]
 
     # Add library setup method
+    @staticmethod
+    def _resolve_library_path(lib_path: str, workspace: Optional[str]) -> str:
+        if not os.path.isabs(lib_path):
+            workspace_dir = workspace or os.getcwd()
+            return os.path.abspath(os.path.join(workspace_dir, lib_path))
+
+        return lib_path
+
+    @staticmethod
+    def _validate_library_path(lib_path: str, lib_name: str):
+        if not os.path.exists(lib_path):
+            raise FileNotFoundError(
+                f"Configured Coq library path for '{lib_name}' does not exist: "
+                f"{lib_path}"
+            )
+        if not os.path.isdir(lib_path):
+            raise NotADirectoryError(
+                f"Configured Coq library path for '{lib_name}' is not a directory: "
+                f"{lib_path}"
+            )
+
     def _setup_coqproject(self):
         """Create or update _CoqProject file with library paths and extra options."""
         try:
@@ -67,9 +104,8 @@ class CoqInterface:
                 lib_name = lib_config["name"]
                 
                 # Ensure we use absolute paths for reliability
-                if not os.path.isabs(lib_path):
-                    workspace_dir = self.workspace or str(Path(self.file_path).parent)
-                    lib_path = os.path.abspath(os.path.join(workspace_dir, lib_path))
+                lib_path = self._resolve_library_path(lib_path, self.workspace)
+                self._validate_library_path(lib_path, lib_name)
                 
                 content_lines.append(f"-R {lib_path} {lib_name}")
                 self.logger.debug(f"  Added library mapping: {lib_path} -> {lib_name}")
@@ -93,6 +129,7 @@ class CoqInterface:
         """Open the Coq file, run it, and set up for proof replay."""
         try:
             self.close()
+            self._invalidate_cached_goal_state()
             self.logger.info(f"Loading Coq file: {self.file_path}")
             
             # Create ProofFile with workspace and timeout
@@ -115,6 +152,8 @@ class CoqInterface:
             if self.proof and self.proof.steps and self.proof.steps[-1].text.strip() == "Admitted.":
                 self.proof_file.pop_step(self.proof)
                 self.logger.debug("Removed 'Admitted.' to open proof for replay")
+
+            self._invalidate_goal_caches()
             
             self.logger.info(f"Successfully loaded proof with {len(self.proof.steps)} initial steps")
             
@@ -160,6 +199,65 @@ class CoqInterface:
         except Exception as e:
             self.logger.error(f"Error getting notations: {e}")
             return []
+
+    def _goal_cache_state_key(self):
+        proof = getattr(self, "proof", None) or self.get_unproven_proof()
+        if not proof:
+            return (None, 0, ())
+
+        try:
+            steps = proof.steps
+        except Exception:
+            return (id(proof), 0, ())
+
+        try:
+            step_texts = tuple(getattr(step, "text", "") for step in steps)
+        except Exception:
+            step_texts = ()
+
+        return (id(proof), len(steps), step_texts)
+
+    def _invalidate_cached_goal_state(self):
+        self.__goal_cache_key = None
+        self.__cached_goals = None
+        self.__goal_cache_filled = False
+
+    def _clear_prooffile_goal_cache(self):
+        if not self.proof_file:
+            return
+
+        if hasattr(self.proof_file, "invalidate_goal_cache"):
+            self.proof_file.invalidate_goal_cache()
+            return
+
+        # Backward-compatible fallback for proof file implementations that do not
+        # expose a public invalidation API.
+        try:
+            self.proof_file._ProofFile__last_end_pos = None
+        except Exception:
+            pass
+
+    def _invalidate_goal_caches(self):
+        self._invalidate_cached_goal_state()
+        self._clear_prooffile_goal_cache()
+
+    def _get_current_goals_cached(self):
+        if not self.proof_file:
+            return None
+
+        state_key = self._goal_cache_state_key()
+        if (
+            self.__goal_cache_key == state_key
+            and self.__goal_cache_filled
+        ):
+            return self.__cached_goals
+
+        self._clear_prooffile_goal_cache()
+        current_goals = self.proof_file.current_goals
+        self.__goal_cache_key = state_key
+        self.__cached_goals = current_goals
+        self.__goal_cache_filled = True
+        return current_goals
     
     def get_raw_goal_str(self):
         """Return the string representation of the current goal."""
@@ -168,11 +266,7 @@ class CoqInterface:
             if not self.proof_file:
                 return "(no proof file loaded)"
 
-            # FORCE REFRESH: Reset the goal cache before getting goals
-            self.proof_file.__last_end_pos = None
-        
-            # Force refresh by accessing current_goals
-            current_goals = self.proof_file.current_goals
+            current_goals = self._get_current_goals_cached()
             if current_goals:
                 return str(current_goals)
         
@@ -333,7 +427,7 @@ class CoqInterface:
             
             # Clean the tactic string
             tactic_clean = tactic.strip().replace('\n', '').replace('\r', '')
-            
+
             # Ensure tactic ends with period (except for { and } which don't need periods)
             # Note: } should be applied as ' }' (with leading space, no period)
             if not tactic_clean.endswith('.') and tactic_clean.strip() not in ['{', '}']:
@@ -351,20 +445,23 @@ class CoqInterface:
                 # Get current step count before adding
                 steps_before = len(self.proof.steps)
 
-                step = self.proof_file.append_step(self.proof, formatted_tactic)
+                self.proof_file.append_step(self.proof, formatted_tactic)
                 
                 steps_after = len(self.proof.steps)
                 if steps_before + 1 != steps_after:
-                    self.logger.error(f"Error: Step count mismatch after applying '{formatted_tactic}'")
-                    self.logger.error(f"Error: Step count before={steps_before}, after={steps_after}")
-                    exit(1) # Fail fast
+                    msg = (
+                        f"Step count mismatch after applying '{formatted_tactic}': "
+                        f"{steps_before} -> {steps_after}"
+                    )
+                    self.logger.error(msg)
+                    raise CoqSessionDesync(msg)
                 
                 # CRITICAL: Force refresh of the current goals after applying tactic
-                self.proof_file.__last_end_pos = None
+                self._invalidate_goal_caches()
                 
                 # After applying tactic, check if this completed the proof
                 if tactic_clean.lower() in ['qed.', 'qed']:
-                    self.logger.info(f"✅ Applied Qed - proof should be complete")
+                    self.logger.info("✅ Applied Qed - proof should be complete")
                 else:
                     # Check if proof became complete after this tactic
                     goals_after = self.get_goal_str()
@@ -400,7 +497,7 @@ class CoqInterface:
             # Abort if Coq server quit
             # (<ErrorCodes.ServerQuit: -32003>, 'Server quit')
             if 'quit' in error_clean.lower():
-                assert False, "Coq server quit unexpectedly."
+                raise CoqSessionDesync("Coq server quit unexpectedly.")
             
             return False
 
@@ -613,6 +710,7 @@ class CoqInterface:
     
             if target_step == current_steps:
                 self.logger.info(f"Already at target step {target_step} - no reset needed")
+                self._invalidate_cached_goal_state()
                 return True
     
             # Calculate steps to remove
@@ -648,6 +746,7 @@ class CoqInterface:
             if final_steps == target_step:
                 self.logger.info(f"✅ Successfully reset to step {target_step}")
                 self.logger.info(f"📊 Removed {successful_pops} steps, {failed_pops} failures")
+                self._invalidate_goal_caches()
                 try:
                     goals = self.get_goal_str()
                     self.logger.debug(f"🎯 Goals after reset: {goals[:100]}...")
@@ -657,11 +756,13 @@ class CoqInterface:
             else:
                 self.last_error = f"Reset incomplete: wanted step {target_step}, got step {final_steps}"
                 self.logger.error(self.last_error)
+                self._invalidate_goal_caches()
                 return False
     
         except Exception as e:
             self.last_error = f"Error during step reset: {str(e)}"
             self.logger.error(self.last_error)
+            self._invalidate_goal_caches()
             return False
 
 
@@ -730,6 +831,7 @@ class CoqInterface:
             if not self.proof_file:
                 self.logger.error("No proof file loaded")
                 return False
+            self._invalidate_goal_caches()
             self.ensure_admitted(self.file_path)
             proof = self.get_unproven_proof()
             
@@ -831,8 +933,6 @@ class CoqInterface:
             in_proof = False
             
             for line in lines:
-                line_stripped = line.strip()
-                
                 # Check if we're starting a proof
                 if re.match(r'^\s*Proof\s*\.', line):
                     in_proof = True
@@ -881,6 +981,7 @@ class CoqInterface:
             
             if hasattr(self, 'proof') and self.proof:
                 self.proof = None
+            self._invalidate_goal_caches()
             
         except Exception as e:
             self.logger.warning(f"Error during CoqInterface close: {e}")
@@ -931,119 +1032,146 @@ class CoqInterface:
             # Append the query to aux_file
             aux_file.append(f"\n{query}")
             aux_file.didChange()
-            
-            import time
-            time.sleep(0.1)  # Wait for LSP to process
-            
-            # Extract command type and parameters
-            parts = query.split()
-            if not parts:
-                return "Empty query"
-            
-            cmd_type = parts[0].lower()
-            
-            # Handle different command types
-            if cmd_type == "search":
-                # Use existing Search logic
-                search_term = query[6:].strip().rstrip('.')
-                if not search_term:
-                    return "No search term provided"
-                
-                # Get search results
-                all_results = []
+            try:
+                return self._run_aux_query(aux_file, query, line_before)
+            finally:
+                # Keep aux_file bounded by removing temporary query text.
                 try:
-                    queries = aux_file._AuxFile__get_queries("Search")
-                    for query_obj in queries:
-                        if hasattr(query_obj, 'query') and query_obj.query == search_term:
-                            #print("Found matching search query : ", query_obj.query)
-                            for result in query_obj.results:
-                                message = result.message
-                                line_num = result.range.start.line
-                                
-                                # Filter out non-search-result messages
-                                # Skip proof goals and other contextual information
-                                if line_num >= line_before:
-                                    # Search results typically contain lemma/theorem names with ':'
-                                    # Skip common proof goal indicators
-                                    skip_prefixes = ['wp_goal:', 'Goals:', 'Proof.', 'Subgoal', 
-                                                   'forall (', 'let ', 'This subproof', 
-                                                   'Error:', 'Warning:']
-                                    
-                                    # Check if this looks like a proof goal rather than a search result
-                                    is_proof_goal = any(message.strip().startswith(prefix) for prefix in skip_prefixes)
-                                    
-                                    # Search results should have a colon (name: type) and not be proof goals
-                                    has_colon = ':' in message
-                                    
-                                    if has_colon and not is_proof_goal:
-                                        # Additional check: search results typically start with an identifier
-                                        # not with keywords like 'forall', 'let', etc.
-                                        first_word = message.strip().split()[0] if message.strip() else ""
-                                        if first_word and not first_word.lower() in ['forall', 'let', 'exists', 'fun']:
-                                            all_results.append(message)
-                                            self.logger.debug(f"Added search result: {message[:80]}...")
-                                        else:
-                                            self.logger.debug(f"Skipped (starts with keyword): {message[:80]}...")
-                                    else:
-                                        self.logger.debug(f"Skipped (proof goal or no colon): {message[:80]}...")
-                except Exception as e:
-                    self.logger.warning(f"Error extracting search results: {e}")
-                
-                # Return the collected results
-                if all_results:
-                    result_text = "\n".join(all_results)
-                    self.logger.debug(f"Search found {len(all_results)} results")
-                    return self._clean_coqpyt_module_names(result_text)
-                else:
-                    return "No results found."
-            
-            elif cmd_type in ["print", "locate", "about", "check"]:
-                # Handle Print, Locate, About, Check commands
-                try:
-                    # Extract identifier
-                    if cmd_type == "print" and len(parts) >= 3 and parts[1].lower() == "assumptions":
-                        # Handle "Print Assumptions [identifier]"
-                        cmd_for_diagnostics = "Print Assumptions"
-                        identifier = parts[2].rstrip('.') if len(parts) >= 3 else ""
-                    else:
-                        # Handle regular commands: Print/Locate/About/Check identifier
-                        cmd_for_diagnostics = cmd_type.title()
-                        identifier = ' '.join(parts[1:]).rstrip('.') if len(parts) >= 2 else ""
-                    
-                    # Try get_diagnostics
-                    current_lines = len(aux_file.read().split('\n'))
-                    result = aux_file.get_diagnostics(cmd_for_diagnostics, identifier, current_lines - 1)
-                    
-                    if result and result.strip():
-                        self.logger.debug(f"{cmd_type} command successful")
-                        return self._clean_coqpyt_module_names(result)
-                    else:
-                        # If diagnostics didn't work, try checking file content changes
-                        new_content = aux_file.read()
-                        new_lines = new_content.split('\n')
-                        
-                        if len(new_lines) > line_before + 1:
-                            # Extract potential output
-                            output_lines = new_lines[line_before + 1:]
-                            output = '\n'.join(line for line in output_lines if line.strip() and line.strip() != query.strip()).strip()
-                            if output:
-                                self.logger.debug(f"{cmd_type} command found content")
-                                return self._clean_coqpyt_module_names(output)
-                    
-                        return "No results found."
-                        
-                except Exception as e:
-                    self.logger.warning(f"Error executing {cmd_type} command: {e}")
-                    return f"Error executing {cmd_type}: {str(e)}"
-            
-            else:
-                # Unknown command type
-                return f"Unsupported query type: {cmd_type}"
+                    aux_file.truncate(f"\n{query}")
+                    aux_file.didChange()
+                except Exception as trunc_err:
+                    self.logger.debug(f"aux_file truncate failed: {trunc_err}")
                 
         except Exception as e:
             self.last_error = f"Query error: {str(e)}"
             self.logger.error(self.last_error)
             return self.last_error
+
+    def _run_aux_query(self, aux_file, query: str, line_before: int) -> str:
+        """Extract the result of the query just appended to `aux_file`."""
+        import time
+
+        deadline = time.time() + min(float(self.timeout or 10), 10.0)
+
+        def _poll(extract):
+            while True:
+                out = extract()
+                if out or time.time() >= deadline:
+                    return out
+                time.sleep(0.1)
+
+        parts = query.split()
+        if not parts:
+            return "Empty query"
+
+        cmd_type = parts[0].lower()
+
+        if cmd_type == "search":
+            search_term = query[6:].strip().rstrip(".")
+            if not search_term:
+                return "No search term provided"
+
+            all_results = _poll(lambda: self._extract_search_results(
+                aux_file, search_term, line_before
+            ))
+
+            if all_results:
+                result_text = "\n".join(all_results)
+                self.logger.debug(f"Search found {len(all_results)} results")
+                return self._clean_coqpyt_module_names(result_text)
+            return "No results found."
+
+        if cmd_type in ["print", "locate", "about", "check"]:
+            try:
+                if cmd_type == "print" and len(parts) >= 3 and parts[1].lower() == "assumptions":
+                    cmd_for_diagnostics = "Print Assumptions"
+                    identifier = parts[2].rstrip(".") if len(parts) >= 3 else ""
+                else:
+                    cmd_for_diagnostics = cmd_type.title()
+                    identifier = " ".join(parts[1:]).rstrip(".") if len(parts) >= 2 else ""
+
+                current_lines = len(aux_file.read().split("\n"))
+                result = _poll(
+                    lambda: aux_file.get_diagnostics(
+                        cmd_for_diagnostics, identifier, current_lines - 1
+                    )
+                )
+
+                if result and result.strip():
+                    self.logger.debug(f"{cmd_type} command successful")
+                    return self._clean_coqpyt_module_names(result)
+
+                new_content = aux_file.read()
+                new_lines = new_content.split("\n")
+                if len(new_lines) > line_before + 1:
+                    output_lines = new_lines[line_before + 1 :]
+                    output = "\n".join(
+                        line
+                        for line in output_lines
+                        if line.strip() and line.strip() != query.strip()
+                    ).strip()
+                    if output:
+                        self.logger.debug(f"{cmd_type} command found content")
+                        return self._clean_coqpyt_module_names(output)
+
+                return "No results found."
+            except Exception as e:
+                self.logger.warning(f"Error executing {cmd_type} command: {e}")
+                return f"Error executing {cmd_type}: {str(e)}"
+
+        return f"Unsupported query type: {cmd_type}"
+
+    def _extract_search_results(self, aux_file, search_term, line_before):
+        all_results = []
+        try:
+            queries = aux_file._AuxFile__get_queries("Search")
+            for query_obj in queries:
+                if hasattr(query_obj, "query") and query_obj.query == search_term:
+                    for result in query_obj.results:
+                        message = result.message
+                        line_num = result.range.start.line
+
+                        if line_num < line_before:
+                            continue
+
+                        skip_prefixes = [
+                            "wp_goal:",
+                            "Goals:",
+                            "Proof.",
+                            "Subgoal",
+                            "forall (",
+                            "let ",
+                            "This subproof",
+                            "Error:",
+                            "Warning:",
+                        ]
+
+                        is_proof_goal = any(
+                            message.strip().startswith(prefix) for prefix in skip_prefixes
+                        )
+                        has_colon = ":" in message
+
+                        if has_colon and not is_proof_goal:
+                            first_word = message.strip().split()[0] if message.strip() else ""
+                            if first_word and first_word.lower() not in [
+                                "forall",
+                                "let",
+                                "exists",
+                                "fun",
+                            ]:
+                                all_results.append(message)
+                                self.logger.debug(f"Added search result: {message[:80]}...")
+                            else:
+                                self.logger.debug(
+                                    f"Skipped (starts with keyword): {message[:80]}..."
+                                )
+                        else:
+                            self.logger.debug(
+                                f"Skipped (proof goal or no colon): {message[:80]}..."
+                            )
+        except Exception as e:
+            self.logger.warning(f"Error extracting search results: {e}")
+        return all_results
 
     @staticmethod
     def ensure_admitted(filename):
@@ -1065,7 +1193,7 @@ class CoqInterface:
                     
             return modified
             
-        except Exception as e:
+        except Exception:
             return False
 
     def get_proof_status(self) -> Dict[str, Any]:
@@ -1115,10 +1243,11 @@ class CoqInterface:
                 
                 # If we get here, Qed was successfully applied
                 self.logger.info("✅ Qed applied successfully - proof is complete! Keeping Qed in file.")
+                self._invalidate_goal_caches()
                 
                 return True
             
-            except Exception as qed_error:
+            except Exception:
                 
                 # Make sure we didn't accidentally add a step due to the failed attempt
                 if len(proof.steps) > original_step_count:
@@ -1127,6 +1256,7 @@ class CoqInterface:
                         self.logger.debug("Cleaned up failed Qed attempt")
                     except Exception as cleanup_error:
                         self.logger.warning(f"Error cleaning up failed Qed: {cleanup_error}")
+                self._invalidate_goal_caches()
             
             return False
             
@@ -1263,12 +1393,8 @@ class CoqInterface:
                 self.logger.debug("No proof file available")
                 return []
             
-            # FORCE REFRESH: Reset the goal cache before getting goals
-            # This is CRITICAL to get current state after tactic application
-            self.proof_file.__last_end_pos = None
-            
             # Get CURRENT goals directly from proof_file (not from cached step.goals)
-            current_goals = self.proof_file.current_goals
+            current_goals = self._get_current_goals_cached()
             
             if not current_goals:
                 self.logger.debug("No current goals available")

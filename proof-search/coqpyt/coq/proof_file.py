@@ -31,7 +31,7 @@ class _AuxFile(object):
     def __init__(
         self,
         file_path,
-        coq_lsp_options: Tuple[str],
+        coq_lsp_options: Optional[Tuple[str, ...]] = None,
         copy: bool = False,
         workspace: Optional[str] = None,
         timeout: int = 30,
@@ -165,12 +165,12 @@ class _AuxFile(object):
 
     @staticmethod
     @lru_cache(maxsize=128)
-    def __load_library(
+    def _load_library(
         library_name: str,
         library_file: str,
         library_hash: str,
         timeout: int,
-        coq_lsp_options: Tuple[str] = None,
+        coq_lsp_options: Optional[Tuple[str, ...]] = None,
         workspace: Optional[str] = None,
     ):
         # NOTE: the library_hash attribute is only used for the LRU cache
@@ -188,8 +188,8 @@ class _AuxFile(object):
 
     @staticmethod
     def set_cache_size(size: Optional[int]):
-        _AuxFile._AuxFile__load_library = lru_cache(maxsize=size)(
-            _AuxFile.__load_library.__wrapped__,
+        _AuxFile._load_library = lru_cache(maxsize=size)(  # type: ignore[method-assign]
+            _AuxFile._load_library.__wrapped__,  # type: ignore[attr-defined]
         )
 
     @classmethod
@@ -212,6 +212,7 @@ class _AuxFile(object):
         if os.path.exists(library_cache_loc):
             with open(library_cache_loc, "rb") as f:
                 return pickle.load(f)
+        return None
 
     @classmethod
     def to_disk_cache(cls, library_hash: str, terms: Dict[str, Term]):
@@ -229,7 +230,7 @@ class _AuxFile(object):
         library_name: str,
         library_file: str,
         timeout: int,
-        coq_lsp_options: Tuple[str],
+        coq_lsp_options: Optional[Tuple[str, ...]] = None,
         workspace: Optional[str] = None,
         use_disk_cache: bool = False,
     ) -> Dict[str, Term]:
@@ -240,7 +241,7 @@ class _AuxFile(object):
             cached_library = cls.get_from_disk_cache(library_hash)
             if cached_library is not None:
                 return cached_library
-        aux_context = _AuxFile.__load_library(
+        aux_context = _AuxFile._load_library(
             library_name,
             library_file,
             library_hash,
@@ -277,7 +278,7 @@ class _AuxFile(object):
         timeout: int,
         workspace: Optional[str] = None,
         use_disk_cache: bool = False,
-        coq_lsp_options: Tuple[str] = None,
+        coq_lsp_options: Optional[Tuple[str, ...]] = None,
     ) -> FileContext:
         temp_path = os.path.join(
             tempfile.gettempdir(), "aux_" + str(uuid.uuid4()).replace("-", "") + ".v"
@@ -324,7 +325,7 @@ class ProofFile(CoqFile):
         timeout: int = 30,
         workspace: Optional[str] = None,
         coq_lsp: str = "coq-lsp",
-        coq_lsp_options: Tuple[str] = None,
+        coq_lsp_options: Optional[Tuple[str, ...]] = None,
         coqtop: str = "coqtop",
         error_mode: str = "strict",
         use_disk_cache: bool = False,
@@ -363,6 +364,7 @@ class ProofFile(CoqFile):
             coqtop=coqtop,
             coq_lsp_options=coq_lsp_options,
         )
+        workspace = self.workspace
         self.__aux_file = _AuxFile(
             file_path,
             timeout=self.timeout,
@@ -417,7 +419,10 @@ class ProofFile(CoqFile):
         while len(stack) > 0:
             el = stack.pop()
             if FileContext.is_id(el):
-                term = self.context.get_term(FileContext.get_id(el))
+                identifier = FileContext.get_id(el)
+                if identifier is None:
+                    continue
+                term = self.context.get_term(identifier)
                 if term is not None and term not in res:
                     res.append(term)
             elif FileContext.is_notation(el):
@@ -484,12 +489,15 @@ class ProofFile(CoqFile):
                     if isinstance(v, list):
                         stack.append(v)
         elif tag in [2, 3, 5]:
-            id = self.current_goals.program[0][0][1]
+            goals = self.current_goals
+            if goals is None or len(goals.program) == 0:
+                raise RuntimeError(f"Unknown obligation command with tag number {tag}: {self.context.last_term.text if self.context.last_term else 'unknown'}")
+            id = goals.program[0][0][1]
             # This works because the obligation must be in the
             # same module as the program
             id = self.context.append_module_prefix(id)
             return self.__program_context[id]
-        text = self.context.last_term.text
+        text = self.context.last_term.text if self.context.last_term is not None else ""
         raise RuntimeError(f"Unknown obligation command with tag number {tag}: {text}")
 
     def __handle_obligations(
@@ -498,16 +506,24 @@ class ProofFile(CoqFile):
         undo: bool = False,
     ) -> bool:
         if not undo:
-            for program in self.__goals(step.ast.range.end).program:
+            goals = self.__goals(step.ast.range.end)
+            if goals is None or goals.program is None:
+                return False
+            for program in goals.program:
                 id = self.context.append_module_prefix(program[0][1])
                 # The new program is not recorded in the context yet
                 if id not in self.__program_context:
                     context = self.__step_context(self.prev_step)
-                    self.__program_context[id] = (self.context.last_term, context)
+                    last_term = self.context.last_term
+                    if last_term is None:
+                        raise RuntimeError("Unable to locate last term for obligation program")
+                    self.__program_context[id] = (last_term, context)
         elif len(self.__program_context) > 0:
             # Dicts are ordered in Python 3.7+, so we simply remove the last added program
             last_added = list(self.__program_context.keys())[-1]
             del self.__program_context[last_added]
+
+        return True
 
     def __has_obligations(self, step: Step):
         for attr in self.context.attrs(step):
@@ -560,14 +576,71 @@ class ProofFile(CoqFile):
         else:
             index = len(self.__open_proofs) if index is None else index
             # New proof terms can be either obligations or regular proofs
-            proof_term, program = self.context.last_term, None
+            proof_term = self.context.last_term
+            if proof_term is None:
+                raise RuntimeError("Unable to locate proof term")
+            program = None
             if self.context.term_type(step) == TermType.OBLIGATION:
                 program, statement_context = self.__get_program_context()
+                if program is None:
+                    raise RuntimeError("Unable to locate program for obligation")
             else:
                 statement_context = self.__step_context(step)
             self.__open_proofs.insert(
                 index, ProofTerm(proof_term, statement_context, [], program)
             )
+
+    _NON_PROOF_VERNAC = frozenset(
+        {
+            "VernacRequire",
+            "VernacImport",
+            "VernacAssumption",
+            "VernacNotation",
+            "VernacReservedNotation",
+            "VernacSyntacticDefinition",
+            "VernacArguments",
+            "VernacHints",
+            "VernacSetOption",
+            "VernacInductive",
+            "VernacCoercion",
+            "VernacOpenCloseScope",
+            "VernacDeclareModule",
+            "VernacDefineModule",
+            "VernacCanonical",
+            "VernacExistingInstance",
+            "VernacScheme",
+        }
+    )
+
+    @staticmethod
+    def _is_complete_definition(expr: List) -> bool:
+        return (
+            isinstance(expr, list)
+            and len(expr) > 3
+            and expr[0] == "VernacDefinition"
+            and isinstance(expr[3], list)
+            and len(expr[3]) > 0
+            and expr[3][0] == "DefineBody"
+        )
+
+    def __forward_in_proof(self, step: Step) -> bool:
+        """Whether `step` should be treated as in-proof for forward execution.
+
+        Uses a local whitelist to avoid `proof_goals` calls for known top-level
+        non-proof vernacs.
+        """
+        if self.open_proofs:
+            return True
+        try:
+            expr = self.context.expr(step)
+            if (
+                expr[0] in self._NON_PROOF_VERNAC
+                or self._is_complete_definition(expr)
+            ):
+                return False
+        except Exception:
+            pass
+        return self.in_proof
 
     def __check_proof_step(self, step: Step, undo: bool = False):
         # Avoids Tactics, Notations, Inductive...
@@ -589,7 +662,7 @@ class ProofFile(CoqFile):
         elif self.__has_obligations(step):
             self.__handle_obligations(step, undo=undo)
         # Check if proof step
-        elif len(self.open_proofs) > 0 if undo else self.in_proof:
+        elif len(self.open_proofs) > 0 if undo else self.__forward_in_proof(step):
             self.__check_proof_step(step, undo=undo)
 
     def __find_step(self, range: Range) -> Optional[Tuple[ProofTerm, int, int]]:
@@ -762,7 +835,8 @@ class ProofFile(CoqFile):
     def __get_changes_data(
         self, changes: List[CoqChange]
     ) -> Tuple[List[int], List[int], int]:
-        steps: List[Union[Step, CoqAdd]] = self.steps[:]
+        steps: List[Union[Step, CoqAdd]] = []
+        steps.extend(self.steps)
         adds: List[int] = []  # For Adds, store the index of the new Step
         deletes: List[int] = []  # For Deletes, store the index of the deleted Step
         deleted_steps: List[Step] = []  # Keep the deleted Steps
@@ -811,15 +885,18 @@ class ProofFile(CoqFile):
                     return False
             return True
 
-        goals = goals.goals
         if goals is None:
             return False
 
+        goal_cfg = goals.goals
+        if goal_cfg is None:
+            return False
+
         return (
-            len(goals.goals) == 0
-            and empty_stack(goals.stack)
-            and len(goals.shelf) == 0
-            and goals.bullet is None
+            len(goal_cfg.goals) == 0
+            and empty_stack(goal_cfg.stack)
+            and len(goal_cfg.shelf) == 0
+            and goal_cfg.bullet is None
         )
 
     def __is_proven(self, proof: ProofTerm) -> bool:
@@ -896,6 +973,11 @@ class ProofFile(CoqFile):
             self.__last_end_pos = end_pos
 
         return self.__current_goals
+
+    def invalidate_goal_cache(self) -> None:
+        """Clear cached goal info so the next access re-queries coq-lsp."""
+        self.__last_end_pos = None
+        self.__current_goals = None
 
     @property
     def in_proof(self) -> bool:

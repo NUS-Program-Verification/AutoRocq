@@ -145,7 +145,14 @@ class LspClient(object):
         result_dict = self.lsp_endpoint.call_method(
             "textDocument/definition", textDocument=textDocument, position=position
         )
-        return [structs.Location(**l) for l in result_dict]
+        if isinstance(result_dict, list):
+            return [
+                structs.Location(**l) if "uri" in l else structs.LinkLocation(**l)
+                for l in result_dict
+            ]
+        if "uri" in result_dict:
+            return [structs.Location(**result_dict)]
+        return [structs.LinkLocation(**result_dict)]
 
     def typeDefinition(self, textDocument, position):
         """
@@ -155,9 +162,15 @@ class LspClient(object):
         :param Position position: The position inside the text document.
         """
         result_dict = self.lsp_endpoint.call_method(
-            "textDocument/definition", textDocument=textDocument, position=position
+            "textDocument/typeDefinition", textDocument=textDocument, position=position
         )
-        return [structs.Location(**l) for l in result_dict]
+        if "uri" in result_dict:
+            return structs.Location(**result_dict)
+
+        return [
+            structs.Location(**l) if "uri" in l else structs.LinkLocation(**l)
+            for l in result_dict
+        ]
 
     def signatureHelp(self, textDocument, position):
         """
@@ -213,29 +226,6 @@ class LspClient(object):
             for l in result_dict
         ]
 
-    def definition(self, textDocument, position):
-        """
-        The go to definition request is sent from the client to the server to resolve the declaration location of a
-        symbol at a given text document position.
-
-        The result type LocationLink[] got introduce with version 3.14.0 and depends in the corresponding client
-        capability `clientCapabilities.textDocument.declaration.linkSupport`.
-
-        :param TextDocumentItem textDocument: The text document.
-        :param Position position: The position inside the text document.
-        """
-        result_dict = self.lsp_endpoint.call_method(
-            "textDocument/definition", textDocument=textDocument, position=position
-        )
-        if "uri" in result_dict:
-            return structs.Location(**result_dict)
-
-        return [
-            structs.Location(**l) if "uri" in l else structs.LinkLocation(**l)
-            for l in result_dict
-        ]
-
-
 # Coq-specific LSP client
 import sys
 import threading
@@ -267,7 +257,7 @@ class CoqLspClient(LspClient):
         timeout: int = 30,
         memory_limit: int = 2097152,
         coq_lsp: str = "coq-lsp",
-        coq_lsp_options: Tuple[str] = None,
+        coq_lsp_options: Optional[Tuple[str, ...]] = None,
         init_options: Dict = __DEFAULT_INIT_OPTIONS,
     ):
         """Creates a CoqLspClient
@@ -349,12 +339,15 @@ class CoqLspClient(LspClient):
         self.__completed_operation.set()
 
     def __handle_file_progress(self, params: Dict):
-        coqFileProgressKind = CoqFileProgressParams.parse(params)
-        uri = coqFileProgressKind.textDocument.uri
+        coq_file_progress = CoqFileProgressParams.parse(params)
+        if coq_file_progress is None:
+            return
+
+        uri = coq_file_progress.textDocument.uri
         if uri not in self.file_progress:
-            self.file_progress[uri] = [coqFileProgressKind]
+            self.file_progress[uri] = [coq_file_progress]
         else:
-            self.file_progress[uri].append(coqFileProgressKind)
+            self.file_progress[uri].append(coq_file_progress)
 
     def __wait_for_operation(self):
         timeout = not self.__completed_operation.wait(self.lsp_endpoint.timeout)

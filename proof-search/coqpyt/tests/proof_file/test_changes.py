@@ -5,6 +5,7 @@ from coqpyt.coq.exceptions import *
 from coqpyt.coq.changes import *
 
 from utility import *
+from utility import SetupProofFile, check_proof, get_test_proofs, add_step_defaults
 
 
 class TestProofValidFile(SetupProofFile):

@@ -3,12 +3,13 @@ import uuid
 import shutil
 import pytest
 import tempfile
+from typing import Optional
 
 from coqpyt.coq.exceptions import *
 from coqpyt.coq.changes import *
 from coqpyt.coq.base_file import CoqFile
 
-coq_file: CoqFile = None
+coq_file: Optional[CoqFile] = None
 
 
 @pytest.fixture
