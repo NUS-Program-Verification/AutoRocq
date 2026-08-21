@@ -463,15 +463,8 @@ class ProofFile(CoqFile):
 
     def __get_program_context(self) -> Tuple[Term, List[Term]]:
         expr = self.context.expr(self.prev_step)
-        # Tags:
-        # 0 - Obligation N of id : type
-        # 1 - Obligation N of id
-        # 2 - Obligation N : type
-        # 3 - Obligation N
-        # 4 - Next Obligation of id
-        # 5 - Next Obligation
         tag = self.context.ext_index(expr[1])
-        if tag in [0, 1, 4]:
+        if self.context.obligation_tag_with_id(tag):
             stack = expr[:0:-1]
             while len(stack) > 0:
                 el = stack.pop()
@@ -488,7 +481,7 @@ class ProofFile(CoqFile):
                 for v in reversed(el):
                     if isinstance(v, list):
                         stack.append(v)
-        elif tag in [2, 3, 5]:
+        else:
             goals = self.current_goals
             if goals is None or len(goals.program) == 0:
                 raise RuntimeError(f"Unknown obligation command with tag number {tag}: {self.context.last_term.text if self.context.last_term else 'unknown'}")
