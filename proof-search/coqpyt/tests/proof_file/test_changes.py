@@ -1,4 +1,5 @@
 import pytest
+from packaging import version
 
 from coqpyt.lsp.structs import *
 from coqpyt.coq.exceptions import *
@@ -559,6 +560,108 @@ class TestProofChangeObligation(SetupProofFile):
     def setup_method(self, method):
         self.setup("test_obligation.v")
 
+    def test_change_obligation(self):
+        proof_file = self.proof_file
+
+        # Delete unwanted steps
+        proof_file.change_steps([CoqDelete(2) for _ in range(30)])
+        proof_file.change_steps([CoqDelete(4) for _ in range(8)])
+        proof_file.change_steps([CoqDelete(16), CoqDelete(2)])
+        proof_file.change_steps([CoqDelete(12) for _ in range(3)])
+
+        # Add a Program definition
+        program = (
+            "\n\nProgram Definition idx (n : nat) : { x : nat | x = n } :="
+            + "\n  if dec (Nat.leb n 0) then 0%nat"
+            + "\n  else pred (S n)."
+        )
+        proof_file.add_step(8, program)
+
+        # Add a Program lemma and proof
+        lemma = "\nProgram Lemma id_lemma (n : nat) : id n = n."
+        lemma_proof = ["\nProof.", " destruct n; try reflexivity.", " Qed."]
+        proof_file.add_step(9, lemma)
+        proof_file.change_steps([CoqAdd(lemma_proof[i], 10 + i) for i in range(3)])
+
+        # Add a proof for each obligation of the new Program
+        proof = ["\nNext Obligation.", "\n  dummy_tactic n e.", "\nQed."]
+        for i, step in enumerate(proof):
+            proof_file.add_step(16 + i, step)
+        for i, step in enumerate(proof):
+            proof_file.add_step(19 + i, step)
+
+        texts = [
+            "Obligation 1 of id with reflexivity.",
+            "Obligation 1 of id.",
+            "Next Obligation.",
+            "Next Obligation.",
+        ]
+        programs = [
+            ("#[program]", "id", "pred (S n)"),
+            ("Program", "id", "S (pred n)"),
+            ("Program", "id", "S (pred n)"),
+            ("Program", "idx", "pred (S n)"),
+        ]
+
+        # Steps were added to the end of the file
+        proof_file.run()
+
+        # Check the proofs
+        assert len(proof_file.proofs) == 5
+        assert len(proof_file.open_proofs) == 0
+        proofs = proof_file.proofs[:1] + proof_file.proofs[2:]
+        for i, proof in enumerate(proofs):
+            assert proof.text == texts[i]
+            assert proof.program is not None
+            assert (
+                proof.program.text
+                == programs[i][0]
+                + " Definition "
+                + programs[i][1]
+                + " (n : nat) : { x : nat | x = n } := if dec (Nat.leb n 0) then 0%nat else "
+                + programs[i][2]
+                + "."
+            )
+            assert len(proof.steps) == 2
+            assert proof.steps[0].text == "\n  dummy_tactic n e."
+        assert proof_file.proofs[1].text == lemma[1:]
+        assert proof_file.proofs[1].program is None
+        for i, step in enumerate(proof_file.proofs[1].steps):
+            assert lemma_proof[i] == step.text
+
+        # Delete last Next Obligation proof
+        for i in range(3):
+            proof_file.delete_step(proof_file.steps_taken - 1)
+        # Delete new Program definition and new Program lemma and proof
+        proof_file.change_steps([CoqDelete(9) for _ in range(5)])
+
+        # Check the proofs
+        assert len(proof_file.proofs) == 3
+        assert len(proof_file.open_proofs) == 0
+        for i, proof in enumerate(proof_file.proofs):
+            assert proof.text == texts[i]
+            assert proof.program is not None
+            assert (
+                proof.program.text
+                == programs[i][0]
+                + " Definition "
+                + programs[i][1]
+                + " (n : nat) : { x : nat | x = n } := if dec (Nat.leb n 0) then 0%nat else "
+                + programs[i][2]
+                + "."
+            )
+            assert len(proof.steps) == 2
+            assert proof.steps[0].text == "\n  dummy_tactic n e."
+
+
+class TestProofChangeObligationWithType(SetupProofFile):
+    def setup_method(self, method):
+        self.setup("test_obligation_with_type.v")
+
+    @pytest.mark.skipif(
+        version.parse(SetupProofFile.COQ_VERSION) >= version.parse("9.0"),
+        reason='Obligations with " : type" are not included in Rocq 9.0+',
+    )
     def test_change_obligation(self):
         proof_file = self.proof_file
 
