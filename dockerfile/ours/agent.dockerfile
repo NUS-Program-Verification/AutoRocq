@@ -11,7 +11,7 @@ RUN apt-get install -y software-properties-common
 RUN apt install -y python3.11-dev python3.11-venv
 RUN apt install -y --fix-missing \
     git graphviz libcairo2-dev libexpat1-dev libgtk-3-dev libgtksourceview-3.0-dev \
-    zlib1g-dev adwaita-icon-theme-full curl libgmp-dev pkg-config bubblewrap
+    zlib1g-dev adwaita-icon-theme-full curl libgmp-dev pkg-config bubblewrap autoconf
 
 RUN apt install python3-pip -y
 
@@ -20,7 +20,7 @@ RUN opam init -y --bare --disable-sandboxing
 RUN opam switch create 4.14.0 ocaml-base-compiler.4.14.0 -y --jobs=1
 RUN eval $(opam env) && opam install dune -y
 
-RUN opam repo add coq-released https://coq.inria.fr/opam/released
+RUN opam repo add rocq-released https://rocq-prover.org/opam/released
 
 RUN apt-get install python2.7 vim -y
 
