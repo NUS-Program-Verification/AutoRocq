@@ -10,6 +10,7 @@ import subprocess
 import logging
 import shutil
 from pathlib import Path
+from packaging import version
 
 # Add the current directory to Python path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -151,17 +152,23 @@ def check_dependencies(logger):
     """Check if required dependencies are available."""
     logger.info("Checking dependencies...")
     
-    # Check for Coq installation first
+    # Check for Rocq installation first
     try:
         result = subprocess.run(['coqtop', '-v'], capture_output=True, text=True)
         if result.returncode == 0:
             version_line = result.stdout.split('\n')[0]
-            logger.info(f"✅ Coq is available: {version_line}")
+            rocq_version = version_line.split()[-1]
+            if version.parse(rocq_version) < version.parse("9.0"):
+                logger.error(
+                    f"❌ Unsupported Rocq version: {version_line} (9.0+ required)"
+                )
+                return False
+            logger.info(f"✅ Rocq is available: {version_line}")
         else:
-            logger.error("❌ Coq is not properly installed")
+            logger.error("❌ Rocq is not properly installed")
             return False
     except FileNotFoundError:
-        logger.error("❌ Coq is not installed or not in PATH")
+        logger.error("❌ Rocq is not installed or not in PATH")
         return False
     
     # Check optional modules

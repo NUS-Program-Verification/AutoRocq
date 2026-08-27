@@ -1,5 +1,4 @@
 import os
-import re
 import shutil
 import subprocess
 import tempfile
@@ -15,13 +14,6 @@ from coqpyt.lsp.structs import *
 
 
 class SetupProofFile(ABC):
-    COQ_VERSION = (
-        subprocess.check_output(f"coqtop -v", shell=True)
-        .decode("utf-8")
-        .split("\n")[0]
-        .split()[-1]
-    )
-
     def setup(self, file_path, workspace=None, use_disk_cache: bool = False):
         if workspace is not None:
             self.workspace = os.path.join(
@@ -75,27 +67,11 @@ def compare_context(
         assert test_context[i][2] == context[i].module
 
 
-def get_context_by_version(context: List[Dict[str, Any]]):
-    res = []
-
-    for term in context:
-        for key in term:
-            if re.match(key.replace("x", "[0-9]+"), SetupProofFile.COQ_VERSION):
-                res.append(term[key])
-                break
-        else:
-            res.append(term["default"] if "default" in term else term)
-
-    return res
-
-
 def check_context(
     test_context: List[Dict[str, Union[str, List]]],
     context: List[Term],
 ):
     assert len(test_context) == len(context)
-    if SetupProofFile.COQ_VERSION is not None:
-        test_context = get_context_by_version(test_context)
     for i in range(len(context)):
         assert test_context[i]["text"] == context[i].text
         assert TermType[test_context[i]["type"]] == context[i].type

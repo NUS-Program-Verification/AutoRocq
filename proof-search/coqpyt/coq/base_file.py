@@ -58,7 +58,8 @@ class CoqFile(object):
             coq_lsp(str, optional): Path to the coq-lsp binary. Defaults to "coq-lsp".
             coqtop(str, optional): Path to the coqtop binary used to compile the Coq libraries
                 imported by coq-lsp. This is NOT passed as a parameter to coq-lsp, it is
-                simply used to check the Coq version in use. Defaults to "coqtop".
+                simply used to check that a supported Rocq version is in use.
+                Defaults to "coqtop".
         """
         if not os.path.isabs(file_path):
             file_path = os.path.abspath(file_path)

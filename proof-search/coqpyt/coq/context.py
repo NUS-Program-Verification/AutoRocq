@@ -18,71 +18,33 @@ class FileContext:
         self.libraries: Dict[str, Dict[str, Term]] = {}
         self.__path = path
         self.__module = [] if module is None else module
-        self.__init_coq_version(coqtop)
+        self.__check_rocq_version(coqtop)
         self.__init_context(terms)
 
-    def __init_coq_version(self, coqtop):
+    def __check_rocq_version(self, coqtop):
         output = subprocess.check_output(f"{coqtop} -v", shell=True)
         coq_version = output.decode("utf-8").split("\n")[0].split()[-1]
 
-        # For versions 8.18+, we ignore the tags [VernacSynterp] and [VernacSynPure]
-        # and use the "ntn_decl" prefix when handling where notations
-        post17 = version.parse(coq_version) >= version.parse("8.18")
-        self.__expr = lambda e: e[1] if post17 else e
-        self.__where_notation_key = "ntn_decl" if post17 else "decl_ntn"
-
-        # For versions 8.19+, VernacExtend has a dictionary instead of a list in the
-        # AST, so we use "ext_plugin","ext_entry" and "ext_index" instead of indices
-        post18 = version.parse(coq_version) >= version.parse("8.19")
-        self.__ext_plugin = lambda e: e["ext_plugin"] if post18 else None
-        self.__ext_entry = lambda e: e["ext_entry"] if post18 else e[0]
-        # FIXME: This should be made private once [__get_program_context] is extracted
-        # from ProofFile to here.
-        self.ext_index = lambda e: e["ext_index"] if post18 else e[1]
-
-        # For versions 9.0+, the AST structure for fixpoints changed and obligation
-        # commands have less tags
-        rocq = version.parse(coq_version) >= version.parse("9.0")
-        self.__fixpoint_notations = lambda e: (
-            []
-            if len(e) < 3 or not isinstance(e[2], list)
-            else (
-                e[2][1][0]["notations"]
-                if (
-                    rocq
-                    and len(e[2]) > 1
-                    and isinstance(e[2][1], list)
-                    and len(e[2][1]) > 0
-                    and isinstance(e[2][1][0], dict)
-                    and "notations" in e[2][1][0]
-                    and isinstance(e[2][1][0]["notations"], list)
-                )
-                else (
-                    e[2][0]["notations"]
-                    if (
-                        not rocq
-                        and len(e[2]) > 0
-                        and isinstance(e[2][0], dict)
-                        and "notations" in e[2][0]
-                        and isinstance(e[2][0]["notations"], list)
-                    )
-                    else []
-                )
+        # We only support Rocq 9.0+, so we provide no claims about earlier versions.
+        if version.parse(coq_version) < version.parse("9.0"):
+            raise RuntimeError(
+                f"Unsupported Rocq version {coq_version}. "
+                "CoqPyt only supports Rocq 9.0 and above."
             )
-        )
-        # FIXME: This should be made private once [__get_program_context] is extracted
-        # from ProofFile to here.
-        # Tags pre-Rocq:                    Tags post-Rocq:
-        # 0 - Obligation N of id : type
-        # 1 - Obligation N of id            0 - Obligation N of id
-        # 2 - Obligation N : type
-        # 3 - Obligation N                  1 - Obligation N
-        # 4 - Next Obligation of id         2 - Next Obligation of id
-        # 5 - Next Obligation               3 - Next Obligation
-        self.obligation_tag_with_id = lambda t: t in ([0, 2] if rocq else [0, 1, 4])
 
-        # We only tested versions 8.17 to 9.0, so we provide no claims about
-        # versions prior to that.
+    # FIXME: These should be made private once [__get_program_context] is
+    # extracted from ProofFile to here.
+    @staticmethod
+    def ext_index(expr: Dict) -> int:
+        return expr["ext_index"]
+
+    @staticmethod
+    def obligation_tag_with_id(tag: int) -> bool:
+        # 0 - Obligation N of id
+        # 1 - Obligation N
+        # 2 - Next Obligation of id
+        # 3 - Next Obligation
+        return tag in [0, 2]
 
     def __init_context(self, terms: Optional[Dict[str, List[Term]]] = None):
         # NOTE: We use a stack for each term because of the following case:
@@ -210,6 +172,23 @@ class FileContext:
             curr_module = module + "." + curr_module
             remove_term(curr_module + name)
 
+    @staticmethod
+    def __fixpoint_notations(expr: List) -> List:
+        # For Rocq 9.0+, the notations of a fixpoint are nested one level deeper
+        # in the AST than they were in previous versions.
+        if (
+            len(expr) > 2
+            and isinstance(expr[2], list)
+            and len(expr[2]) > 1
+            and isinstance(expr[2][1], list)
+            and len(expr[2][1]) > 0
+            and isinstance(expr[2][1][0], dict)
+            and "notations" in expr[2][1][0]
+            and isinstance(expr[2][1][0]["notations"], list)
+        ):
+            return expr[2][1][0]["notations"]
+        return []
+
     # Simultaneous definition of terms and notations (where clause)
     # https://coq.inria.fr/refman/user-extensions/syntax-extensions.html#simultaneous-definition-of-terms-and-notations
     def __handle_where_notations(self, step: Step, expr: List, term_type: TermType):
@@ -235,8 +214,8 @@ class FileContext:
         # handles when multiple notations are defined
         for span in spans:
             name = FileContext.__get_notation_key(
-                span[f"{self.__where_notation_key}_string"]["v"],
-                span[f"{self.__where_notation_key}_scope"],
+                span["ntn_decl_string"]["v"],
+                span["ntn_decl_scope"],
             )
             self.__add_term(name, step, TermType.NOTATION)
 
@@ -246,8 +225,8 @@ class FileContext:
         if expr[0] != "VernacExtend":
             return False
         if exact:
-            return self.__ext_entry(expr[1]) == entry
-        return self.__ext_entry(expr[1]).startswith(entry)
+            return expr[1]["ext_entry"] == entry
+        return expr[1]["ext_entry"].startswith(entry)
 
     def __term_type(self, expr: List) -> TermType:
         if expr[0] == "VernacStartTheoremProof":
@@ -495,7 +474,8 @@ class FileContext:
             and isinstance(step.ast.span["v"], dict)
             and "expr" in step.ast.span["v"]
         ):
-            return self.__expr(step.ast.span["v"]["expr"])
+            # We ignore the [VernacSynterp] and [VernacSynPure] tags
+            return step.ast.span["v"]["expr"][1]
         return [None]
 
     def attrs(self, step: Step) -> List:
