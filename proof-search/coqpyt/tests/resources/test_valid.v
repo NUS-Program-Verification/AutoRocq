@@ -1,6 +1,6 @@
 (* Start of test file. *)
 
-Require Import Coq.Unicode.Utf8.
+Require Import Stdlib.Unicode.Utf8.
 
 Ltac reduce_eq := simpl; reflexivity.
 

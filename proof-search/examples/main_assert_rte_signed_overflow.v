@@ -320,7 +320,7 @@ Axiom proj_int32 :
 Axiom proj_int64 :
   forall (x:Numbers.BinNums.Z), ((to_sint64 (to_uint64 x)) = (to_sint64 x)).
 
-From Coq Require Import ZArith Lia.
+From Stdlib Require Import ZArith Lia.
 
 Open Scope Z_scope.
 

@@ -1,4 +1,4 @@
-Require Import Coq.derive.Derive.
+Require Import Stdlib.derive.Derive.
 
 Derive incr
 SuchThat (forall n, incr n = plus 1 n)

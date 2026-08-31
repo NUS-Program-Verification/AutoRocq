@@ -1,5 +1,5 @@
 (** * Ordering characters *)
-From Coq Require Import Ascii Orders OrderedType.
+From Stdlib Require Import Ascii Orders OrderedType.
 
 Definition bool_compare_cont (b1 b2: bool) (k: comparison) : comparison :=
   match b1, b2 with

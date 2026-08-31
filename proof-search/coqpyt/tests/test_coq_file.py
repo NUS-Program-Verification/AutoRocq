@@ -319,7 +319,7 @@ def test_diagnostics(setup, teardown):
 @pytest.mark.parametrize("setup", ["test_invalid_1.v"], indirect=True)
 def test_diagnostics_invalid(setup, teardown):
     coq_file.run()
-    assert len(coq_file.diagnostics) == 8
+    assert len(coq_file.diagnostics) == 7
     assert len(coq_file.errors) == 1
     regex = r'Found no subterm matching "0 \+ \?M[0-9]+" in the current goal\.'
     assert re.match(regex, coq_file.errors[0].message) is not None
