@@ -1,5 +1,4 @@
 import os
-import re
 import shutil
 import subprocess
 import tempfile
@@ -45,9 +44,6 @@ class SetupProofFile(ABC):
         self.proof_file.run()
         self.versionId = VersionedTextDocumentIdentifier(uri, 1)
 
-        output = subprocess.check_output(f"coqtop -v", shell=True)
-        self.coq_version = output.decode("utf-8").split("\n")[0].split()[-1]
-
     @abstractmethod
     def setup_method(self, method):
         pass
@@ -71,7 +67,10 @@ def compare_context(
         assert test_context[i][2] == context[i].module
 
 
-def check_context(test_context: List[Dict[str, Union[str, List]]], context: List[Term]):
+def check_context(
+    test_context: List[Dict[str, Union[str, List]]],
+    context: List[Term],
+):
     assert len(test_context) == len(context)
     for i in range(len(context)):
         assert test_context[i]["text"] == context[i].text
@@ -151,10 +150,8 @@ def check_proof(test_proof: Dict, proof: ProofTerm):
         check_step(step, proof.steps[j])
 
 
-def check_proofs(
-    yaml_file: str, proofs: List[ProofTerm], coq_version: Optional[str] = None
-):
-    test_proofs = get_test_proofs(yaml_file, coq_version)
+def check_proofs(yaml_file: str, proofs: List[ProofTerm]):
+    test_proofs = get_test_proofs(yaml_file)
     assert len(proofs) == len(test_proofs["proofs"])
     for i, test_proof in enumerate(test_proofs["proofs"]):
         check_proof(test_proof, proofs[i])
@@ -179,30 +176,12 @@ def add_step_defaults(step):
         step["context"] = []
 
 
-def get_context_by_version(context: List[Dict[str, Any]], coq_version: str):
-    res = []
-
-    for term in context:
-        for key in term:
-            if re.match(key.replace("x", "[0-9]+"), coq_version):
-                res.append(term[key])
-                break
-        else:
-            res.append(term["default"] if "default" in term else term)
-
-    return res
-
-
-def get_test_proofs(yaml_file: str, coq_version: Optional[str] = None):
+def get_test_proofs(yaml_file: str):
     with open(yaml_file, "r") as f:
         test_proofs = yaml.safe_load(f)
     for test_proof in test_proofs["proofs"]:
         if "context" not in test_proof:
             test_proof["context"] = []
-        if coq_version is not None:
-            test_proof["context"] = get_context_by_version(
-                test_proof["context"], coq_version
-            )
         for step in test_proof["steps"]:
             add_step_defaults(step)
     return test_proofs

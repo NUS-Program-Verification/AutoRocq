@@ -136,7 +136,7 @@ class CoqChatSession:
         self.enable_rollback = enable_rollback
         self.enable_local_session_caching = enable_local_session_caching
         self.current_plan = None
-        self.coq_version = "8.18.0"
+        self.coq_version = "9.0.0"
 
         # Token usage tracking
         self.total_prompt_tokens = 0

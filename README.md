@@ -7,7 +7,7 @@
 ---
 
 
-This repository contains the source code of AutoRocq, an agent prover in Rocq (formerly Coq) 8.18.0.
+This repository contains the source code of AutoRocq, an agent prover in Rocq (formerly Coq) 9.0.0.
 
 To discharge a formally stated theorem in Rocq, the agent runs in the following loop:
 

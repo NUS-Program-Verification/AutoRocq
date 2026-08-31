@@ -1,9 +1,13 @@
 import sys
-import os
 from pathlib import Path
+
+# Add project root to path
+PROJECT_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from coqpyt.coq.proof_file import ProofFile
 from coqpyt.coq.exceptions import InvalidChangeException
+from tests.test_utils import temp_example_copy
 
 
 def clean_proof_file(file_path):
@@ -29,43 +33,47 @@ def clean_proof_file(file_path):
         print(f"❌ Error cleaning file: {e}")
         return False
 
-file_path = os.path.join(os.getcwd(), "examples/example.v")
-# Clean the proof file first
-clean_proof_file(file_path)
 
-with ProofFile(os.path.join(os.getcwd(), "examples/example.v")) as proof_file:
-    proof_file.run()
-    # Get the first admitted proof
-    unproven = proof_file.unproven_proofs[0]
-    # Steps for an incorrect proof
-    incorrect = [" reflexivity.", "\nQed."]
-    # Steps for a correct proof
-    correct = [" rewrite app_assoc."] + incorrect
+def test_append_proof_steps():
+    # Work on a throwaway copy: coqpyt writes every accepted change back to
+    # the file on disk, which would otherwise dirty the tracked example.
+    file_path = str(temp_example_copy("example.v"))
+    # Clean the proof file first
+    clean_proof_file(file_path)
 
-    # Important: always start with the ""
-    correct = [
-        "  intros b.",
-        "  destruct b.",
-        "  simpl.",
-        "  reflexivity.",
-        "  simpl.",
-        "  reflexivity.",
-        "  Qed.",
-    ]
+    with ProofFile(file_path) as proof_file:
+        proof_file.run()
+        # Get the first admitted proof
+        unproven = proof_file.unproven_proofs[0]
+        # Steps for an incorrect proof
+        incorrect = [" reflexivity.", "\nQed."]
+        # Steps for a correct proof
+        correct = [" rewrite app_assoc."] + incorrect
 
-    # Loop through both attempts
-    for attempt in [correct, correct]:
-        # Remove the "\nAdmitted." step
-        #proof_file.pop_step(unproven)
-        try:
-            # Append all steps in the attempt
-            for i, s in enumerate(attempt):
-                proof_file.append_step(unproven, s)
-            print("Proof succeeded!")
+        # Important: always start with the ""
+        correct = [
+            "  intros b.",
+            "  destruct b.",
+            "  simpl.",
+            "  reflexivity.",
+            "  simpl.",
+            "  reflexivity.",
+            "  Qed.",
+        ]
+
+        # Loop through both attempts
+        for attempt in [correct, correct]:
+            # Remove the "\nAdmitted." step
+            #proof_file.pop_step(unproven)
+            try:
+                # Append all steps in the attempt
+                for i, s in enumerate(attempt):
+                    proof_file.append_step(unproven, s)
+                print("Proof succeeded!")
+                break
+            except InvalidChangeException:
+                # Some step was invalid, so we rollback the previous changes
+                [proof_file.pop_step(unproven) for _ in range(i)]
+                proof_file.append_step(unproven, "\nAdmitted.")
+                print("Proof attempt not valid.")
             break
-        except InvalidChangeException:
-            # Some step was invalid, so we rollback the previous changes
-            [proof_file.pop_step(unproven) for _ in range(i)]
-            proof_file.append_step(unproven, "\nAdmitted.")
-            print("Proof attempt not valid.")
-        break

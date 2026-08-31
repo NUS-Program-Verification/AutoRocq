@@ -342,7 +342,8 @@ class ProofFile(CoqFile):
             coq_lsp (str, optional): Path to the coq-lsp binary. Defaults to "coq-lsp".
             coqtop (str, optional): Path to the coqtop binary used to compile the Coq libraries
                 imported by coq-lsp. This is NOT passed as a parameter to coq-lsp, it is
-                simply used to check the Coq version in use. Defaults to "coqtop".
+                simply used to check that a supported Rocq version is in use.
+                Defaults to "coqtop".
             error_mode (str, optional): How errors are handled. Can be "strict" or "warning".
                 If "strict", an exception will be raised when an unexpected behavior occurs.
                 If "warning", a warning will be logged instead (it only applies to recoverable errors).
@@ -463,15 +464,8 @@ class ProofFile(CoqFile):
 
     def __get_program_context(self) -> Tuple[Term, List[Term]]:
         expr = self.context.expr(self.prev_step)
-        # Tags:
-        # 0 - Obligation N of id : type
-        # 1 - Obligation N of id
-        # 2 - Obligation N : type
-        # 3 - Obligation N
-        # 4 - Next Obligation of id
-        # 5 - Next Obligation
         tag = self.context.ext_index(expr[1])
-        if tag in [0, 1, 4]:
+        if self.context.obligation_tag_with_id(tag):
             stack = expr[:0:-1]
             while len(stack) > 0:
                 el = stack.pop()
@@ -488,7 +482,7 @@ class ProofFile(CoqFile):
                 for v in reversed(el):
                     if isinstance(v, list):
                         stack.append(v)
-        elif tag in [2, 3, 5]:
+        else:
             goals = self.current_goals
             if goals is None or len(goals.program) == 0:
                 raise RuntimeError(f"Unknown obligation command with tag number {tag}: {self.context.last_term.text if self.context.last_term else 'unknown'}")

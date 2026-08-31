@@ -17,7 +17,6 @@ class TestProofValidFile(SetupProofFile):
         check_proofs(
             "tests/proof_file/expected/valid_file.yml",
             proofs,
-            coq_version=self.coq_version,
         )
 
     def test_exec(self):
@@ -48,7 +47,6 @@ class TestProofImports(SetupProofFile):
         check_proofs(
             "tests/proof_file/expected/imports.yml",
             self.proof_file.proofs,
-            coq_version=self.coq_version,
         )
 
     def test_exec(self):
@@ -266,15 +264,15 @@ class TestProofObligation(SetupProofFile):
         texts = [
             "Obligation 2 of id2.",
             "Next Obligation of id2.",
-            "Obligation 2 of id3 : type with reflexivity.",
+            "Obligation 2 of id3 with reflexivity.",
             "Next Obligation of id3 with reflexivity.",
             "Next Obligation.",
             "Next Obligation with reflexivity.",
             "Obligation 1.",
-            "Obligation 2 : type with reflexivity.",
+            "Obligation 2 with reflexivity.",
             "Obligation 1 of id with reflexivity.",
-            "Obligation 1 of id : type.",
-            "Obligation 2 : type.",
+            "Obligation 1 of id.",
+            "Obligation 2.",
         ]
         programs = [
             ("#[global, program]", "id2", "S (pred n)"),

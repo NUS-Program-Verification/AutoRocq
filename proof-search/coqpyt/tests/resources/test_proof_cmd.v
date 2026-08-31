@@ -1,4 +1,4 @@
-Require Import Coq.Unicode.Utf8.
+Require Import Stdlib.Unicode.Utf8.
 
 Section Random.
   Variable (n : nat) (Hn : n <> 0).

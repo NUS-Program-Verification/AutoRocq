@@ -591,7 +591,7 @@ class TestProofChangeObligation(SetupProofFile):
 
         texts = [
             "Obligation 1 of id with reflexivity.",
-            "Obligation 1 of id : type.",
+            "Obligation 1 of id.",
             "Next Obligation.",
             "Next Obligation.",
         ]

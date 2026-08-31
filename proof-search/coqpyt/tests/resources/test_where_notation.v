@@ -1,3 +1,4 @@
+Declare Scope test_scope.
 Reserved Notation "A & B" (at level 80).
 Reserved Notation "'ONE'" (at level 80).
 Reserved Notation "x 🀄 y" (at level 80).

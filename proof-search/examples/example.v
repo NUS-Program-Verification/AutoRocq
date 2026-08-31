@@ -1,8 +1,8 @@
-Require Import Coq.Unicode.Utf8.
-Require Import List.
-Require Import ZArith.
+Require Import Stdlib.Unicode.Utf8.
+From Stdlib Require Import List.
+From Stdlib Require Import ZArith.
 
-From Coq Require Import ZArith Lia.
+From Stdlib Require Import ZArith Lia.
 
 Open Scope Z_scope.
 

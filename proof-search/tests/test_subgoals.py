@@ -8,9 +8,12 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from backend.coq_interface import CoqInterface
 from utils.config import ProofAgentConfig
+from tests.test_utils import temp_example_copy
 
 # --- CONFIGURATION ---
-coq_file = PROJECT_ROOT / "examples" / "main_loop_invariant_2_established_Coq.v"
+# Work on a throwaway copy: the agent writes the proof it finds back into the
+# file it is proving, which would otherwise dirty the tracked example.
+coq_file = temp_example_copy("main_loop_invariant_2_established_Coq.v")
 config_file = PROJECT_ROOT / "configs" / "default_config.json"
 
 def test_intros_tactic():

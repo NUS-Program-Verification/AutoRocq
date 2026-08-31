@@ -1,4 +1,4 @@
-Require Import Coq.Unicode.Utf8.
+Require Import Stdlib.Unicode.Utf8.
 
 Module A.
     Definition x := 2.
