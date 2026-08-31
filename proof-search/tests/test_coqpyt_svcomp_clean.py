@@ -1,12 +1,14 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from coqpyt.coq.proof_file import ProofFile
-from coqpyt.coq.exceptions import InvalidChangeException, InvalidFileException
+from coqpyt.coq.exceptions import InvalidFileException
 
 # --- CONFIGURATION ---
 file_path = PROJECT_ROOT / "examples" / "main_loop_invariant_2_established_Coq_clean.v"
@@ -21,7 +23,7 @@ print(f"📁 Loading file: {file_path}")
 if not file_path.exists():
     print(f"File does not exist: {file_path}")
     print("Skipping test - file not available")
-    sys.exit(0)  # Not a failure, just skip
+    pytest.skip("fixture file not available", allow_module_level=True) # Not a failure, just skip
 
 print(f"File path verified")
 

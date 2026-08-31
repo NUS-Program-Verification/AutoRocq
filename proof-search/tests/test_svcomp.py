@@ -7,7 +7,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from backend.coq_interface import CoqInterface
 from utils.config import ProofAgentConfig
-from tests.test_utils import reset_coq_file_to_admitted, restore_coq_file_from_backup
+from tests.test_utils import reset_coq_file_to_admitted, restore_coq_file_from_backup, skip_if_libraries_missing
 
 # --- CONFIGURATION ---
 coq_file = PROJECT_ROOT / "examples" / "main_loop_invariant_2_established_Coq.v"
@@ -88,6 +88,7 @@ def test_proof_with_correct_tactics():
         
         # Load configuration from file (this includes library_paths and auto_setup_coqproject)
         config = ProofAgentConfig.from_file(str(config_file))
+        skip_if_libraries_missing(config)
         print(f"✅ Loaded configuration from {config_file}")
         print(f"📚 Library paths configured: {len(config.coq.library_paths)}")
         

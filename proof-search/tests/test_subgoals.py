@@ -8,11 +8,9 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from backend.coq_interface import CoqInterface
 from utils.config import ProofAgentConfig
-from tests.test_utils import temp_example_copy
+from tests.test_utils import temp_example_copy, skip_if_libraries_missing
 
 # --- CONFIGURATION ---
-# Work on a throwaway copy: the agent writes the proof it finds back into the
-# file it is proving, which would otherwise dirty the tracked example.
 coq_file = temp_example_copy("main_loop_invariant_2_established_Coq.v")
 config_file = PROJECT_ROOT / "configs" / "default_config.json"
 
@@ -23,6 +21,7 @@ def test_intros_tactic():
     try:
         # Load configuration from file
         config = ProofAgentConfig.from_file(str(config_file))
+        skip_if_libraries_missing(config)
         print(f"✅ Loaded configuration from {config_file}")
         
         # Initialize CoqInterface using configuration

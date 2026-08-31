@@ -16,7 +16,7 @@ from agent.context_manager import ContextManager
 from agent.proof_tree import ProofTree
 from agent.proof_controller import ProofController
 from utils.config import ProofAgentConfig
-from tests.test_utils import reset_coq_file_to_admitted
+from tests.test_utils import reset_coq_file_to_admitted, skip_if_libraries_missing
 
 # --- CONFIGURATION ---
 coq_file = PROJECT_ROOT / "examples" / "hex2bin_assert_3.v"
@@ -49,6 +49,7 @@ def test_proof_tree_evolution():
     
     # Load configuration
     config = ProofAgentConfig.from_file(str(config_file))
+    skip_if_libraries_missing(config)
     print(f"✅ Loaded configuration from {config_file}")
     
     # Create CoqInterface

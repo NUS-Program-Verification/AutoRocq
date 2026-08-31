@@ -5,6 +5,8 @@ from pathlib import Path
 import time
 from typing import List, Dict, Any
 
+import pytest
+
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -20,7 +22,7 @@ benchmark_folder = PROJECT_ROOT.parent / "AutoRocq-bench" / "benchmarks" / "svco
 lemmas_txt = PROJECT_ROOT.parent / "AutoRocq-bench" / "benchmarks" / "svcomp-ablation.txt"
 
 # Accept config file as a command-line argument
-if len(sys.argv) > 1:
+if len(sys.argv) > 1 and sys.argv[1].endswith(".json"):
     print(f"Using config file from command line: {sys.argv[1]}")
     config_file = Path(sys.argv[1])
 else:
@@ -143,6 +145,7 @@ def prove_single_file(coq_file: Path, config: ProofAgentConfig) -> bool:
     
     return False
 
+@pytest.mark.llm
 def test_folder_batch():
     """Test all .v files listed in lemmas.txt with simple progress output."""
     print("🚀 Batch Proof Testing")

@@ -1,8 +1,20 @@
-import atexit
+import inspect
+import os
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Optional
+
+import pytest
+
+
+def skip_if_libraries_missing(config):
+    for entry in config.coq.library_paths or []:
+        path = entry["path"] if isinstance(entry, dict) else entry.path
+        if not os.path.isdir(path):
+            pytest.skip(
+                f"Coq library '{entry.get('name', '?') if isinstance(entry, dict) else '?'}' "
+                f"not available at {path}; configure coq.library_paths (README step 3)"
+            )
 
 # Project root for tests
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -95,20 +107,16 @@ def get_example_file() -> Path:
     return PROJECT_ROOT / "examples" / "example.v"
 
 
+TEMP_EXAMPLE_ROOT = Path(tempfile.gettempdir()) / "autorocq-test-examples"
+
 
 def temp_example_copy(name: str) -> Path:
     """
-    Copy an example .v file into a private temp directory and return the copy.
+    Copy an example .v file to a stable temp path and return the copy.
 
-    Tests must never run against the tracked files in examples/. coqpyt writes
-    every accepted change straight back to the file on disk (see
-    coqpyt/coq/base_file.py), so a test that points the agent at a committed
-    file leaves the working tree dirty with whatever proof the search happened
-    to find. coqpyt's own suite avoids this the same way -- see
-    coqpyt/tests/proof_file/utility.py.
+    Tests must never run against the tracked files in examples/.
 
-    The temp directory is removed at interpreter exit, so the copy survives for
-    the whole test session (CoqInterface writes its _CoqProject next to it).
+    The copy lives under a *fixed* directory for better coqpyt caching.
 
     Args:
         name: File name under examples/, e.g. "example.v".
@@ -117,9 +125,13 @@ def temp_example_copy(name: str) -> Path:
         Path to the writable copy.
     """
     src = PROJECT_ROOT / "examples" / name
-    tmp_dir = tempfile.mkdtemp(prefix="autorocq-test-")
-    atexit.register(shutil.rmtree, tmp_dir, ignore_errors=True)
 
-    dst = Path(tmp_dir) / src.name
+    caller = inspect.currentframe().f_back
+    owner = Path(caller.f_globals.get("__file__", "shared")).stem
+
+    tmp_dir = TEMP_EXAMPLE_ROOT / owner
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    dst = tmp_dir / src.name
     shutil.copyfile(src, dst)
     return dst

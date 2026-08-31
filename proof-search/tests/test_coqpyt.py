@@ -35,8 +35,6 @@ def clean_proof_file(file_path):
 
 
 def test_append_proof_steps():
-    # Work on a throwaway copy: coqpyt writes every accepted change back to
-    # the file on disk, which would otherwise dirty the tracked example.
     file_path = str(temp_example_copy("example.v"))
     # Clean the proof file first
     clean_proof_file(file_path)

@@ -9,6 +9,8 @@ import json
 from pathlib import Path
 from datetime import datetime
 
+import pytest
+
 # Add the parent directory to the path so we can import from agent
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -31,8 +33,7 @@ def test_search_commands():
     proof_file_path = PROJECT_ROOT / "examples" / "match_string_assert.v"
     
     if not proof_file_path.exists():
-        print(f"❌ Proof file not found: {proof_file_path}")
-        return False
+        pytest.skip(f"fixture not in the repo: {proof_file_path}")
     
     print(f"📄 Proof file: {proof_file_path}")
     

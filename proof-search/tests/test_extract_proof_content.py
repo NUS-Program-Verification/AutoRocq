@@ -105,7 +105,7 @@ def test_extract_with_real_file():
             print(f"\n✅ Content validation:")
             checks = {
                 "Has Require imports": any("Require " in line for line in extracted_lines),
-                "Has ZArith import": "From Coq Require Import ZArith Lia." in extracted,
+                "Has ZArith import": "From Stdlib Require Import ZArith Lia." in extracted,
                 "Has Open Scope": "Open Scope Z_scope." in extracted,
                 "Has wp_goal theorem": "Theorem wp_goal" in extracted
             }

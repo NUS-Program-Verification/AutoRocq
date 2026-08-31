@@ -2,6 +2,8 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 # Add the parent directory to Python path so we can import backend modules
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -14,6 +16,13 @@ from utils.coq_utils import find_transitive_dependencies
 # --- CONFIGURATION ---
 coq_file = PROJECT_ROOT / "examples" / "example.v"
 config_file = PROJECT_ROOT / "configs" / "default_config.json"
+
+
+@pytest.fixture
+def config():
+    """Config used by the tests below; they only read config.llm.api_key."""
+    return ProofAgentConfig.from_file(str(config_file))
+
 
 def test_context_manager_initialization(config):
     """Simple test of the ContextManager initialization."""
@@ -168,19 +177,20 @@ if __name__ == "__main__":
     print("Testing ContextManager")
     print("=" * 60)
     
-    config = ProofAgentConfig.from_file(str(config_file))
-    
+    # Named cfg, not config, so the script path does not shadow the fixture.
+    cfg = ProofAgentConfig.from_file(str(config_file))
+
     # Run initialization test
     print("\n--- ContextManager Initialization Test ---")
-    init_test_passed = test_context_manager_initialization(config)
-    
+    init_test_passed = test_context_manager_initialization(cfg)
+
     # Run proof file test
     print("\n--- ContextManager Proof File Test ---")
-    proof_test_passed = test_context_manager_with_proof(config)
+    proof_test_passed = test_context_manager_with_proof(cfg)
     
     # Run content extraction test
     print("\n--- Content Extraction Test ---")
-    extraction_test_passed = test_extract_essential_content(config)
+    extraction_test_passed = test_extract_essential_content(cfg)
     
     # Summary
     print("\n" + "=" * 60)

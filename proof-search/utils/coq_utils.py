@@ -127,7 +127,12 @@ def extract_essential_proof_content(logger, proof_file_content):
         imports = []
         for line in lines:
             line_stripped = line.strip()
-            if line_stripped.startswith('Require ') and not line_stripped.startswith('(*'):
+            is_import = (
+                line_stripped.startswith('Require ')
+                or re.match(r'From\s+\S+\s+Require\b', line_stripped) is not None
+                or line_stripped.startswith('Open Scope ')
+            )
+            if is_import and not line_stripped.startswith('(*'):
                 clean_line = re.sub(r'\(\*.*?\*\)', '', line_stripped).strip()
                 if clean_line:
                     imports.append(clean_line)

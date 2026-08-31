@@ -2,6 +2,8 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -101,6 +103,7 @@ def clean_proof_file(file_path):
         traceback.print_exc()
         return False
 
+@pytest.mark.llm
 def test_llm_proof_generation_with_controller():
     """Test LLM-based proof generation using ProofController with built-in error handling"""
     print("🤖🔧 Testing LLM-based proof generation using ProofController with error handling...")

@@ -35,6 +35,10 @@ AutoRocq now supports your favorite model through LiteLLM! See the supported mod
 
 AutoRocq now supports [interactive mode](#interactive-mode), where you can *co-develop* a proof with the agent, monitoring progress and providing hints in real time with the built-in [shell](#repl-commands).
 
+#### Rocq 9.0.0
+
+AutoRocq has been migrated to Rocq [9.0.0](https://rocq-prover.org/releases/9.0.0)! Please see past [releases](https://github.com/NUS-Program-Verification/AutoRocq/releases) for compatibility with older versions of Rocq/Coq.
+
 ---
 
 ### Directory Structure
@@ -65,7 +69,7 @@ scripts/                           # Directory of scripts
 └── get_results.py                 # Parser of .json results
 ```
 
-### Setup Instructions
+### Setup Instructions (local)
 
 1. Install dependencies in Python
 
@@ -78,6 +82,16 @@ pip install -r requirement.txt
 ```bash
 opam switch import deps.opam
 ```
+
+### Setup Instructions (Docker)
+
+Build the AutoRocq image by running:
+
+```bash
+docker build -t autorocq -f dockerfile/ours/agent.dockerfile .
+```
+
+Building the image would typically take ~30 minutes.
 
 ### Minimal Example of Proof Agent
 
