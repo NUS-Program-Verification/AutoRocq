@@ -264,7 +264,7 @@ def test_derive(setup, teardown):
         assert key in coq_file.context.terms
         assert (
             coq_file.context.terms[key].text
-            == "Derive incr SuchThat (forall n, incr n = plus 1 n) As incr_correct."
+            == "Derive incr in (forall n, incr n = plus 1 n) as incr_correct."
         )
     keywords = [
         "Inversion",

@@ -1,8 +1,8 @@
 Require Import Stdlib.derive.Derive.
 
 Derive incr
-SuchThat (forall n, incr n = plus 1 n)
-As incr_correct.
+in (forall n, incr n = plus 1 n)
+as incr_correct.
 Proof. intros n. simpl. subst incr. reflexivity. Qed.
 
 Inductive Le : nat -> nat -> Set :=

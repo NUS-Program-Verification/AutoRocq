@@ -1,6 +1,6 @@
 Require Import Stdlib.Unicode.Utf8.
-Require Import List.
-Require Import ZArith.
+From Stdlib Require Import List.
+From Stdlib Require Import ZArith.
 
 From Stdlib Require Import ZArith Lia.
 
