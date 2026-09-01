@@ -1,4 +1,4 @@
-"""Test raw Rocq query commands through CoqInterface.search()."""
+"""Test CoqInterface.search() results and failure reporting against Rocq."""
 
 import sys
 from pathlib import Path
@@ -101,9 +101,8 @@ def test_every_query_command_returns_real_content():
     for query, expected in QUERY_EXPECTATIONS:
         result = coq.search(query)
 
-        assert result and result.strip(), f"{query}: empty result"
-        for sentinel in ("aux_file not accessible", "Error executing ", "Query error:"):
-            assert not result.startswith(sentinel), f"{query}: query failed -> {result!r}"
+        assert result is not None, f"{query}: search failed -> {coq.get_last_error()}"
+        assert result.strip(), f"{query}: empty result"
         assert result != "No results found.", f"{query}: found nothing"
 
         if expected is None:
@@ -134,9 +133,26 @@ def test_empty_result_is_a_success_not_a_failure():
     print("\n  ✅ empty result -> 'No results found.', last_error stays None")
 
 
+def test_failed_query_returns_none_with_a_reason():
+    """The failure half of the contract, against a live session."""
+    coq = get_interface()
+    result = coq.search("Frobnicate foo.")
+
+    assert result is None, f"expected None for an unsupported command, got {result!r}"
+    assert coq.get_last_error() == "Unsupported query type: frobnicate", (
+        coq.get_last_error()
+    )
+    print("  ✅ unsupported command -> None, last_error names the command")
+
+    # The session must still work afterwards.
+    assert coq.search("Check nat") is not None, "a failed query broke the session"
+    print("  ✅ session still usable after a failed query")
+
+
 TESTS = [
     test_every_query_command_returns_real_content,
     test_empty_result_is_a_success_not_a_failure,
+    test_failed_query_returns_none_with_a_reason,
 ]
 
 
