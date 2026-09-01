@@ -18,11 +18,22 @@ from tests.test_utils import temp_example_copy
 coq_file = temp_example_copy("example.v")
 config_file = PROJECT_ROOT / "configs" / "default_config.json"
 
+# conftest.py skips these unless --runllm is passed. Without the marker every
+# plain `pytest` run called the API for real, and billed for it.
+pytestmark = pytest.mark.llm
+
 
 @pytest.fixture
 def config():
-    """Config used by the tests below; they only read config.llm.api_key."""
-    return ProofAgentConfig.from_file(str(config_file))
+    """Config used by the tests below; they only read config.llm.api_key.
+
+    Skips rather than fails when no key is configured: --runllm asks for these
+    to run, but an unconfigured checkout should not go red for it.
+    """
+    loaded = ProofAgentConfig.from_file(str(config_file))
+    if not (getattr(loaded.llm, "api_key", None) or os.getenv("OPENAI_API_KEY")):
+        pytest.skip("needs an LLM API key")
+    return loaded
 
 
 def test_context_manager_initialization(config):
