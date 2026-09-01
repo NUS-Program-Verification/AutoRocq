@@ -24,7 +24,8 @@ class CoqInterface:
                  library_paths: Optional[List[Dict[str, str]]] = None,
                  auto_setup_coqproject: bool = False,
                  coqproject_extra_options: Optional[List[str]] = None,
-                 timeout: int = 10):
+                 timeout: int = 10,
+                 source_path: Optional[str] = None):
         """
         Initialize Coq interface.
         
@@ -32,8 +33,12 @@ class CoqInterface:
         - library_paths: List of library mappings [{"path": "/path", "name": "libname"}, ...]
         - auto_setup_coqproject: Whether to automatically create/update _CoqProject
         - coqproject_extra_options: Additional options for _CoqProject
+        - source_path: The file this one is a scratch copy of, when it is one.
+          Proofs are run on a throwaway copy (see utils/scratch.py), so records
+          and reports must name the original rather than the copy.
         """
         self.file_path = os.path.abspath(file_path)
+        self.source_path = os.path.abspath(source_path) if source_path else self.file_path
         if workspace is not None and not os.path.isabs(workspace):
             workspace = os.path.abspath(workspace)
         self.workspace = workspace

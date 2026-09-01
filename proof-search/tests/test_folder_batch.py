@@ -2,6 +2,7 @@
 import os
 import sys
 from pathlib import Path
+from datetime import datetime
 import time
 from typing import List, Dict, Any
 
@@ -15,6 +16,7 @@ from backend.coq_interface import CoqInterface
 from agent.context_manager import ContextManager
 from agent.proof_controller import ProofController
 from utils.config import ProofAgentConfig
+from utils.scratch import ScratchProof
 
 # --- CONFIGURATION ---
 # Folder containing .v files to prove
@@ -68,20 +70,35 @@ def read_v_files_from_lemmas(lemmas_path: str, benchmark_folder: str) -> List[st
                 print(f"❌ File not found: {full_path}")
     return v_files
 
-def prove_single_file(coq_file: Path, config: ProofAgentConfig) -> bool:
-    """Prove a single file with crash recovery."""
+def prove_single_file(
+    coq_file: Path,
+    config: ProofAgentConfig,
+    results_dir: Path = None,
+    result_name: str = None,
+) -> bool:
+    """Prove a single file with crash recovery.
+
+    The benchmark files are tracked sources: cleaning strips their proofs and
+    coqpyt writes each accepted tactic back to disk, so a run would rewrite the
+    whole of AutoRocq-bench. Every attempt therefore happens on a scratch copy,
+    and the result is saved into results_dir where it can be re-checked later.
+    """
     max_crash_retries = 3
     crash_count = 0
     
     while crash_count < max_crash_retries:
+        scratch = ScratchProof(coq_file)
         try:
-            # Clean the proof file first
-            if not clean_proof_file(coq_file):
+            scratch.open()
+            
+            # Clean the scratch copy, never the benchmark file itself
+            if not clean_proof_file(scratch.path):
                 return False
             
             # Initialize CoqInterface
             coq_interface = CoqInterface(
-                file_path=str(coq_file),
+                file_path=str(scratch.path),
+                source_path=str(coq_file),
                 workspace=config.coq.workspace or str(Path(coq_file).parent),
                 library_paths=config.coq.library_paths,
                 auto_setup_coqproject=config.coq.auto_setup_coqproject,
@@ -142,6 +159,11 @@ def prove_single_file(coq_file: Path, config: ProofAgentConfig) -> bool:
             else:
                 # Re-raise non-crash errors
                 raise e
+        
+        finally:
+            if results_dir is not None:
+                scratch.save(results_dir, result_name)
+            scratch.close()
     
     return False
 
@@ -170,6 +192,12 @@ def test_folder_batch():
         proved_count = 0
         failed_count = 0
         
+        # Each attempt is saved here so it can be re-verified independently
+        # later, instead of being overwritten by the next run.
+        results_dir = PROJECT_ROOT / "results" / f"batch-{datetime.now():%Y%m%d-%H%M%S}"
+        results_dir.mkdir(parents=True, exist_ok=True)
+        print(f"💾 Saving proofs to: {results_dir}")
+        
         print(f"📁 Found {total_files} .v files listed in {lemmas_txt}")
         print(f"🚀 Starting batch proof testing...")
         print()
@@ -180,7 +208,9 @@ def test_folder_batch():
             # --- Add this line to clearly show which file is being proved ---
             print(f"\n=== Proving file [{i}/{total_files}]: {rel_path} | Proved: {proved_count} | Failed: {failed_count} | Remaining: {total_files - i} ===")
             start_time = time.time()
-            success = prove_single_file(coq_file, config)
+            success = prove_single_file(
+                coq_file, config, results_dir, rel_path.replace(os.sep, "__")
+            )
             elapsed = time.time() - start_time
 
             # Update counters

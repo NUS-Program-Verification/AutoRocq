@@ -23,6 +23,7 @@ from agent.interactive_session import InteractiveSessionManager
 
 from utils.config import load_config, ProofAgentConfig
 from utils.logger import setup_logger, global_logger
+from utils.scratch import ScratchProof
 
 
 def parse_arguments():
@@ -208,6 +209,7 @@ def initialize_components(args, config: ProofAgentConfig, logger) -> Dict[str, A
         
         coq_interface = CoqInterface(
             file_path=args.proof_file,
+            source_path=config.coq.proof_file_path,
             workspace=workspace,
             library_paths=library_paths,
             auto_setup_coqproject=getattr(config.coq, 'auto_setup_coqproject', True),
@@ -548,10 +550,11 @@ def clean_proof_file(file_path: str, logger) -> bool:
 def main():
     """Main entry point with history management."""
     
-    global components, logger, exit_code
+    global components, logger, exit_code, scratch
     components = {}
     logger = None
     exit_code = 1
+    scratch = None
     
     def signal_handler(signum, frame):
         sig_name = signal.Signals(signum).name
@@ -559,6 +562,10 @@ def main():
         
         if components and logger:
             cleanup_components(components, logger)
+        
+        if scratch:
+            scratch.save(output_dir)
+            scratch.close()
         
         sys.exit(128 + signum)
     
@@ -647,6 +654,14 @@ def main():
     # --interactive flag overrides config
     if args.interactive:
         config.interactive.enabled = True
+
+    # Prove on a throwaway copy. Cleaning below strips the existing tactics and
+    # coqpyt writes every accepted tactic back to disk, so the file being proved
+    # must never be the user's own. config.coq.proof_file_path keeps pointing at
+    # the original, which is what reporting and recording should name.
+    scratch = ScratchProof(args.proof_file, logger)
+    scratch.open()
+    args.proof_file = str(scratch.path)
 
     # Clean proof by removing existing tactics. Skip in interactive mode
     if config.interactive.enabled:
@@ -776,6 +791,11 @@ def main():
             logger.warning(f"Could not retrieve token statistics: {e}")
         
         cleanup_components(components, logger)
+        
+        # Coq session is closed, so the scratch file is safe to harvest and remove.
+        if scratch:
+            scratch.save(output_dir)
+            scratch.close()
         
     sys.exit(exit_code)
 
