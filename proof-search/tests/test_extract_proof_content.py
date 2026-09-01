@@ -13,11 +13,15 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from backend.coq_interface import CoqInterface
 from agent.context_manager import ContextManager
 from utils.config import ProofAgentConfig
-from tests.test_utils import reset_coq_file_to_admitted, restore_coq_file_from_backup
+from tests.test_utils import (
+    reset_coq_file_to_admitted,
+    restore_coq_file_from_backup,
+    temp_example_copy,
+)
 
 
 # --- CONFIGURATION ---
-coq_file = PROJECT_ROOT / "examples" / "main_loop_invariant_2_established_Coq.v"
+coq_file = temp_example_copy("main_loop_invariant_2_established_Coq.v")
 config_file = PROJECT_ROOT / "configs" / "default_config.json"
 
 
