@@ -1,5 +1,6 @@
 # backend/coq_interface.py
 
+import atexit
 import os
 import re
 import signal
@@ -10,6 +11,7 @@ from coqpyt.coq.structs import TermType
 from pathlib import Path
 from contextlib import contextmanager
 from utils.logger import setup_logger, clean_ansi_codes
+from utils.scratch import ScratchProof
 
 
 class CoqSessionDesync(RuntimeError):
@@ -24,8 +26,7 @@ class CoqInterface:
                  library_paths: Optional[List[Dict[str, str]]] = None,
                  auto_setup_coqproject: bool = False,
                  coqproject_extra_options: Optional[List[str]] = None,
-                 timeout: int = 10,
-                 source_path: Optional[str] = None):
+                 timeout: int = 10):
         """
         Initialize Coq interface.
         
@@ -33,12 +34,23 @@ class CoqInterface:
         - library_paths: List of library mappings [{"path": "/path", "name": "libname"}, ...]
         - auto_setup_coqproject: Whether to automatically create/update _CoqProject
         - coqproject_extra_options: Additional options for _CoqProject
-        - source_path: The file this one is a scratch copy of, when it is one.
-          Proofs are run on a throwaway copy (see utils/scratch.py), so records
-          and reports must name the original rather than the copy.
+
+        There is no read-only mode: load() alone pops the trailing "Admitted.",
+        clear_all_proof_scripts() rewrites the file, and coqpyt writes every
+        accepted tactic straight to disk. So file_path is never touched -- it is
+        the source, and all work happens on a copy beside it. source_path names
+        the original for anything that reports or records a proof; file_path is
+        the copy the agent actually edits. Call save_result() for the outcome.
         """
-        self.file_path = os.path.abspath(file_path)
-        self.source_path = os.path.abspath(source_path) if source_path else self.file_path
+        self.source_path = os.path.abspath(file_path)
+        self.logger = setup_logger("CoqInterface")
+
+        self._scratch = ScratchProof(file_path, self.logger)
+        self.file_path = str(self._scratch.open())
+        # Not in close(): load() calls close() to tear down the previous coq-lsp
+        # session and would delete the file out from under itself.
+        # ScratchProof.close() only unlinks files, so it is safe at exit.
+        atexit.register(self._scratch.close)
         if workspace is not None and not os.path.isabs(workspace):
             workspace = os.path.abspath(workspace)
         self.workspace = workspace
@@ -52,7 +64,6 @@ class CoqInterface:
         self.proof_file = None
         self.proof = None
         self.last_error = None
-        self.logger = setup_logger("CoqInterface")
 
         # Cache for recent goal queries so we avoid back-to-back LSP `proof_goals` calls
         # when the proof state hasn't changed.
@@ -992,6 +1003,10 @@ class CoqInterface:
             self.logger.warning(f"Error during CoqInterface close: {e}")
             # Don't raise - just log and continue
     
+    def save_result(self, dest_dir, name: Optional[str] = None):
+        """Copy the proof the agent produced into dest_dir. Returns the path."""
+        return self._scratch.save(dest_dir, name)
+
     def force_close(self):
         try:
             self.logger.info("Forcing coq-lsp shutdown...")

@@ -16,7 +16,6 @@ from backend.coq_interface import CoqInterface
 from agent.context_manager import ContextManager
 from agent.proof_controller import ProofController
 from utils.config import ProofAgentConfig
-from utils.scratch import ScratchProof
 
 # --- CONFIGURATION ---
 # Folder containing .v files to prove
@@ -87,18 +86,11 @@ def prove_single_file(
     crash_count = 0
     
     while crash_count < max_crash_retries:
-        scratch = ScratchProof(coq_file)
+        coq_interface = None
         try:
-            scratch.open()
-            
-            # Clean the scratch copy, never the benchmark file itself
-            if not clean_proof_file(scratch.path):
-                return False
-            
-            # Initialize CoqInterface
+            # CoqInterface proves on a copy, so the benchmark file is never touched.
             coq_interface = CoqInterface(
-                file_path=str(scratch.path),
-                source_path=str(coq_file),
+                file_path=str(coq_file),
                 workspace=config.coq.workspace or str(Path(coq_file).parent),
                 library_paths=config.coq.library_paths,
                 auto_setup_coqproject=config.coq.auto_setup_coqproject,
@@ -107,6 +99,9 @@ def prove_single_file(
             )
             
             try:
+                if not clean_proof_file(coq_interface.file_path):
+                    return False
+
                 # Load the cleaned file
                 if not coq_interface.load():
                     return False
@@ -161,9 +156,8 @@ def prove_single_file(
                 raise e
         
         finally:
-            if results_dir is not None:
-                scratch.save(results_dir, result_name)
-            scratch.close()
+            if coq_interface is not None and results_dir is not None:
+                coq_interface.save_result(results_dir, result_name)
     
     return False
 
