@@ -1014,8 +1014,14 @@ class CoqInterface:
         pattern = r'coqpyt_aux_[0-9a-f]{32}'
         return re.sub(pattern, 'Top', text)
 
-    def search(self, query: str) -> str:
-        """Execute any Coq query command (Search, Print, Locate, About, Check, Print Assumptions) using aux_file."""
+    def search(self, query: str) -> Optional[str]:
+        """Execute any Coq query command (Search, Print, Locate, About, Check, Print Assumptions) using aux_file.
+
+        Returns the query output on success, or None on failure with the reason
+        on self.last_error -- the same signal apply_tactic/reset_by_step use, read
+        back with get_last_error(). A query that legitimately matches nothing is a
+        success, not a failure: it returns "No results found.".
+        """
         try:
             self.last_error = None
             
@@ -1027,7 +1033,7 @@ class CoqInterface:
             # Ensure we have aux_file access
             if not hasattr(self.proof_file, "_ProofFile__aux_file"):
                 self.last_error = "aux_file not accessible"
-                return "aux_file not accessible"
+                return None
             
             aux_file = self.proof_file._ProofFile__aux_file
             
@@ -1050,10 +1056,13 @@ class CoqInterface:
         except Exception as e:
             self.last_error = f"Query error: {str(e)}"
             self.logger.error(self.last_error)
-            return self.last_error
+            return None
 
-    def _run_aux_query(self, aux_file, query: str, line_before: int) -> str:
-        """Extract the result of the query just appended to `aux_file`."""
+    def _run_aux_query(self, aux_file, query: str, line_before: int) -> Optional[str]:
+        """Extract the result of the query just appended to `aux_file`.
+
+        None means the query failed; see self.last_error.
+        """
         import time
 
         deadline = time.time() + min(float(self.timeout or 10), 10.0)
@@ -1067,15 +1076,20 @@ class CoqInterface:
 
         parts = query.split()
         if not parts:
-            return "Empty query"
+            self.last_error = "Empty query"
+            return None
 
         cmd_type = parts[0].lower()
 
         if cmd_type == "search":
             search_term = query[6:].strip().rstrip(".")
             if not search_term:
-                return "No search term provided"
+                self.last_error = "No search term provided"
+                return None
 
+            # _extract_search_results swallows its own exceptions so that polling
+            # can retry; it records the last one here instead.
+            self.last_error = None
             all_results = _poll(lambda: self._extract_search_results(
                 aux_file, search_term, line_before
             ))
@@ -1084,6 +1098,8 @@ class CoqInterface:
                 result_text = "\n".join(all_results)
                 self.logger.debug(f"Search found {len(all_results)} results")
                 return self._clean_coqpyt_module_names(result_text)
+            if self.last_error:
+                return None
             return "No results found."
 
         if cmd_type in ["print", "locate", "about", "check"]:
@@ -1121,10 +1137,12 @@ class CoqInterface:
 
                 return "No results found."
             except Exception as e:
+                self.last_error = f"Error executing {cmd_type}: {str(e)}"
                 self.logger.warning(f"Error executing {cmd_type} command: {e}")
-                return f"Error executing {cmd_type}: {str(e)}"
+                return None
 
-        return f"Unsupported query type: {cmd_type}"
+        self.last_error = f"Unsupported query type: {cmd_type}"
+        return None
 
     def _extract_search_results(self, aux_file, search_term, line_before):
         all_results = []
@@ -1175,6 +1193,9 @@ class CoqInterface:
                                 f"Skipped (proof goal or no colon): {message[:80]}..."
                             )
         except Exception as e:
+            # Still returns whatever was collected so the polling loop above can
+            # retry; the record here is what makes the final give-up visible.
+            self.last_error = f"Error executing Search: {e}"
             self.logger.warning(f"Error extracting search results: {e}")
         return all_results
 
