@@ -23,7 +23,6 @@ from agent.interactive_session import InteractiveSessionManager
 
 from utils.config import load_config, ProofAgentConfig
 from utils.logger import setup_logger, global_logger
-from utils.scratch import ScratchProof
 
 
 def parse_arguments():
@@ -202,20 +201,8 @@ def initialize_components(args, config: ProofAgentConfig, logger) -> Dict[str, A
                 logger.info(f"   - {lib['name']}: {lib['path']}")
             logger.info(f"🔧 Auto setup CoqProject: {getattr(config.coq, 'auto_setup_coqproject', True)}")
         
-        # If hammer is enabled, add hammer library import to proof file
-        if config.enable_hammer:
-            logger.info("🔧 Hammer enabled. Importing hammer library...")
-            with open(args.proof_file, 'r', encoding='utf-8') as f:
-                content = f.read()
-            if "From Hammer Require Import Hammer." not in content:
-                with open(args.proof_file, 'w', encoding='utf-8') as f:
-                    f.write("From Hammer Require Import Hammer.\nFrom Hammer Require Import Tactics.\n\n" + content)
-            else:
-                logger.debug("🔧 Hammer already imported - skipping")
-        
         coq_interface = CoqInterface(
             file_path=args.proof_file,
-            source_path=config.coq.proof_file_path,
             workspace=workspace,
             library_paths=library_paths,
             auto_setup_coqproject=getattr(config.coq, 'auto_setup_coqproject', True),
@@ -223,6 +210,30 @@ def initialize_components(args, config: ProofAgentConfig, logger) -> Dict[str, A
             timeout=getattr(config.coq, 'timeout', 60)
         )
         
+        # Everything below edits the file, so it has to come after the
+        # constructor -- that is what puts the scratch copy in place.
+        scratch_file = coq_interface.file_path
+
+        if config.enable_hammer:
+            logger.info("🔧 Hammer enabled. Importing hammer library...")
+            with open(scratch_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+            if "From Hammer Require Import Hammer." not in content:
+                with open(scratch_file, 'w', encoding='utf-8') as f:
+                    f.write("From Hammer Require Import Hammer.\nFrom Hammer Require Import Tactics.\n\n" + content)
+            else:
+                logger.debug("🔧 Hammer already imported - skipping")
+
+        # Clean proof by removing existing tactics. Skip in interactive mode
+        if config.interactive.enabled:
+            logger.debug("🤝 Interactive mode enabled - preserving existing proof tactics")
+            clean_success = ensure_proof_admitted(scratch_file, logger)
+        else:
+            logger.debug("🧹 Pre-cleaning proof file to ensure unproven state...")
+            clean_success = clean_proof_file(scratch_file, logger)
+            if not clean_success:
+                logger.warning("⚠️ Could not clean proof file - will try CoqInterface methods later")
+
         # Load the file using proper method
         success = coq_interface.load()
         if not success:
@@ -291,7 +302,8 @@ def initialize_components(args, config: ProofAgentConfig, logger) -> Dict[str, A
             "coq_interface": coq_interface,
             "context_manager": context_manager,
             "coq_chat_session": context_manager.chat_session,
-            "controller": controller
+            "controller": controller,
+            "clean_success": clean_success
         }
         
     except Exception as e:
@@ -553,14 +565,24 @@ def clean_proof_file(file_path: str, logger) -> bool:
         return False
 
 
+def _harvest_proof(components, output_dir, logger):
+    """Save whatever the agent proved into the run's output directory."""
+    coq_interface = (components or {}).get("coq_interface")
+    if coq_interface is None:
+        return
+    try:
+        coq_interface.save_result(output_dir)
+    except Exception as e:
+        logger.warning(f"Could not save the resulting proof: {e}")
+
+
 def main():
     """Main entry point with history management."""
     
-    global components, logger, exit_code, scratch
+    global components, logger, exit_code
     components = {}
     logger = None
     exit_code = 1
-    scratch = None
     
     def signal_handler(signum, frame):
         sig_name = signal.Signals(signum).name
@@ -569,10 +591,8 @@ def main():
         if components and logger:
             cleanup_components(components, logger)
         
-        if scratch:
-            scratch.save(output_dir)
-            scratch.close()
-        
+        _harvest_proof(components, output_dir, logger)
+
         sys.exit(128 + signum)
     
     # Register signal handlers
@@ -661,24 +681,6 @@ def main():
     if args.interactive:
         config.interactive.enabled = True
 
-    # Prove on a throwaway copy. Cleaning below strips the existing tactics and
-    # coqpyt writes every accepted tactic back to disk, so the file being proved
-    # must never be the user's own. config.coq.proof_file_path keeps pointing at
-    # the original, which is what reporting and recording should name.
-    scratch = ScratchProof(args.proof_file, logger)
-    scratch.open()
-    args.proof_file = str(scratch.path)
-
-    # Clean proof by removing existing tactics. Skip in interactive mode
-    if config.interactive.enabled:
-        logger.debug("🤝 Interactive mode enabled - preserving existing proof tactics")
-        clean_success = ensure_proof_admitted(args.proof_file, logger)
-    else:
-        logger.debug("🧹 Pre-cleaning proof file to ensure unproven state...")
-        clean_success = clean_proof_file(args.proof_file, logger)
-        if not clean_success:
-            logger.warning("⚠️ Could not clean proof file - will try CoqInterface methods later")
-
     # Initialize components
     try:
         components = initialize_components(args, config, logger)  # Pass both args and config
@@ -689,6 +691,7 @@ def main():
         
         # Log final proof file verification
         coq_interface = components["coq_interface"]
+        clean_success = components["clean_success"]
         logger.info(f"✅ Coq interface loaded: {coq_interface.file_path}")
         
         if not clean_success and not config.interactive.enabled:
@@ -798,10 +801,8 @@ def main():
         
         cleanup_components(components, logger)
         
-        # Coq session is closed, so the scratch file is safe to harvest and remove.
-        if scratch:
-            scratch.save(output_dir)
-            scratch.close()
+        # Coq session is closed, so the scratch copy is safe to harvest.
+        _harvest_proof(components, output_dir, logger)
         
     sys.exit(exit_code)
 

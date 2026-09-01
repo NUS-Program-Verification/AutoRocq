@@ -228,7 +228,7 @@ class ProofController:
                     proof_file=proof_file,
                     theorem_name=self.current_theorem_name,
                     metadata={'max_steps': self.max_steps, 'controller_version': '1.0'},
-                    proof_file_path=getattr(self.coq, 'source_path', None)
+                    proof_file_path=self.coq.source_path
                 )
             except Exception as e:
                 self.logger.error(f"❌ Failed to start proof recording: {e}")
