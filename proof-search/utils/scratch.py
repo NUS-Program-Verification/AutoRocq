@@ -43,6 +43,7 @@ class ScratchProof:
         )
         self._coqproject = self.source.parent / "_CoqProject"
         self._coqproject_backup: Optional[bytes] = None
+        self._pre_existing_trees: set = set()
 
     def open(self) -> Path:
         """Create the scratch copy and return its path."""
@@ -52,6 +53,12 @@ class ScratchProof:
         # otherwise leave the source tree modified too.
         if self._coqproject.exists():
             self._coqproject_backup = self._coqproject.read_bytes()
+
+        # ProofController writes <theorem>_proof_tree_final.png/.json next to the
+        # file being proved, named after the theorem rather than the scratch file,
+        # so the pattern below cannot catch them. Record which already exist and
+        # remove only the ones this run adds.
+        self._pre_existing_trees = set(self.source.parent.glob("*_proof_tree_final.*"))
 
         self._log(f"📄 Proving on scratch copy: {self.path.name} (original untouched)")
         return self.path
@@ -79,6 +86,10 @@ class ScratchProof:
         """Remove the scratch copy and undo the run's edits to the source tree."""
         litter = [self.path, self.path.with_suffix(".v.backup")]
         litter += [self.path.with_suffix(suffix) for suffix in _BUILD_SUFFIXES]
+        litter += [
+            tree for tree in self.source.parent.glob("*_proof_tree_final.*")
+            if tree not in self._pre_existing_trees
+        ]
 
         for path in litter:
             try:
