@@ -7,9 +7,10 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from backend.coq_interface import CoqInterface
 from agent.proof_tree import ProofState
+from tests.test_utils import temp_example_copy
 
 if __name__ == "__main__":
-    file_path = str(PROJECT_ROOT / "examples" / "example.v")
+    file_path = str(temp_example_copy("example.v"))
     coq = CoqInterface(file_path)
     coq.load()
 

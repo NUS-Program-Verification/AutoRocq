@@ -16,10 +16,14 @@ from agent.context_manager import ContextManager
 from agent.proof_tree import ProofTree
 from agent.proof_controller import ProofController
 from utils.config import ProofAgentConfig
-from tests.test_utils import reset_coq_file_to_admitted, skip_if_libraries_missing
+from tests.test_utils import (
+    reset_coq_file_to_admitted,
+    skip_if_libraries_missing,
+    temp_example_copy,
+)
 
 # --- CONFIGURATION ---
-coq_file = PROJECT_ROOT / "examples" / "hex2bin_assert_3.v"
+coq_file = temp_example_copy("hex2bin_assert_3.v")
 config_file = PROJECT_ROOT / "configs" / "default_config.json"
 
 
@@ -36,7 +40,7 @@ def test_proof_tree_evolution():
     print("=" * 80)
     
     # Create output directory for proof tree visualizations
-    output_dir = PROJECT_ROOT / "examples" / "proof_tree_debug"
+    output_dir = coq_file.parent / "proof_tree_debug"
     output_dir.mkdir(exist_ok=True)
     print(f"📁 Proof tree PNGs will be saved to: {output_dir}")
     
@@ -232,7 +236,7 @@ if __name__ == "__main__":
         print("🎉 TEST PASSED!")
         print("✅ Examined all tactics successfully")
         print("✅ Proof tree maintained automatically by ProofController._apply_tactic()")
-        print("✅ Check examples/proof_tree_debug/ for PNG visualizations")
+        print(f"✅ Check {output_dir}/ for PNG visualizations")
     else:
         print("❌ TEST FAILED!")
     

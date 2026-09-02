@@ -14,9 +14,10 @@ from backend.coq_interface import CoqInterface
 from agent.context_manager import ContextManager
 from agent.proof_controller import ProofController
 from utils.config import ProofAgentConfig
+from tests.test_utils import temp_example_copy
 
 # --- CONFIGURATION ---
-coq_file = PROJECT_ROOT / "examples" / "main_loop_invariant_2_established_Coq.v"
+coq_file = temp_example_copy("main_loop_invariant_2_established_Coq.v")
 config_file = PROJECT_ROOT / "configs" / "default_config.json"
 
 def print_current_goals(coq_interface):

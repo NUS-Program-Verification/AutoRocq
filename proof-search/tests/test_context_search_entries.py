@@ -18,6 +18,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 try:
     from backend.coq_interface import CoqInterface
     from agent.context_search import CoqCommandSearch
+    from tests.test_utils import temp_example_copy
     print("✅ CoqInterface and CoqCommandSearch available")
 except ImportError as e:
     print(f"❌ Import failed: {e}")
@@ -30,10 +31,10 @@ def test_search_commands():
     print("Testing Search Commands with Ranking and Summarization")
     print("=" * 70)
     
-    proof_file_path = PROJECT_ROOT / "examples" / "match_string_assert.v"
-    
-    if not proof_file_path.exists():
-        pytest.skip(f"fixture not in the repo: {proof_file_path}")
+    try:
+        proof_file_path = temp_example_copy("match_string_assert.v")
+    except OSError as e:
+        pytest.skip(f"fixture not in the repo: {e}")
     
     print(f"📄 Proof file: {proof_file_path}")
     
