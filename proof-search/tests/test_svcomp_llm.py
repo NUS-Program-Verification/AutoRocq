@@ -1,388 +1,110 @@
-import os
+"""
+The full agent on the SV-COMP goal: ContextController + context search +
+error feedback, driven by a live model.
+
+Where test_controller_prove.py checks the bare prove_theorem() contract, this
+run has context search and error feedback on, so it also pins that the query
+commands the model issues are recorded separately from tactics and never end up
+in the proof script.
+
+The old version tallied everything the run produced, printed a verdict in three
+tiers ("SUCCESSFUL" / "PARTIALLY SUCCESSFUL" / "STRUGGLED"), and returned
+is_complete -- which pytest ignores, so all three tiers passed identically, as
+did a run that raised before the model was ever called. Like its sibling it
+printed `controller.step_count`, which does not exist; the AttributeError was
+swallowed by the blanket `except Exception`.
+"""
+
+import json
 import sys
 from pathlib import Path
 
 import pytest
 
-# Add project root to path
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-import logging
-
-from backend.coq_interface import CoqInterface
 from agent.context_manager import ContextManager
 from agent.proof_controller import ProofController
+from backend.coq_interface import CoqInterface
+from tests.test_utils import skip_if_libraries_missing, temp_example_copy
 from utils.config import ProofAgentConfig
-from tests.test_utils import temp_example_copy
 
-# --- CONFIGURATION ---
-coq_file = temp_example_copy("main_loop_invariant_2_established_Coq.v")
 config_file = PROJECT_ROOT / "configs" / "default_config.json"
+THEOREM = "main_loop_invariant_2_established"
+MAX_STEPS = 100
 
-def print_current_goals(coq_interface):
-    """Print current goals from the CoqInterface"""
-    '''
-    print("\n🎯 Current Goals:")
-    try:
-        goals_str = coq_interface.get_goal_str()
-        if goals_str and goals_str != "No current goals":
-            print(goals_str)
-        else:
-            print("(No goals remaining)")
-    except Exception as e:
-        print(f"(Error getting goals: {e})")
-    '''
-    pass
+QUERY_PREFIXES = ("Search", "Print", "Locate", "About", "Check")
 
-def print_steps(coq_interface):
-    """Print proof steps using CoqInterface"""
-    print("== Proof Steps ==")
-    try:
-        if coq_interface.proof and coq_interface.proof.steps:
-            for i, step in enumerate(coq_interface.proof.steps):
-                print(f"{i+1}: {step.text.strip()}")
-        else:
-            print("No steps available")
-    except Exception as e:
-        print(f"Error getting steps: {e}")
-    print("-" * 40)
-
-def clean_proof_file(file_path):
-    """Clean the proof file by removing everything after 'Proof.' and adding fresh 'Proof.'"""
-    print("\n🧹 CLEANING PROOF FILE...")
-    print("="*60)
-    
-    try:
-        # Read the original file
-        print(f"📖 Reading file: {file_path}")
-        with open(file_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-        
-        # Find the position of "Proof."
-        proof_pos = content.find("Proof.")
-        if proof_pos == -1:
-            print("❌ 'Proof.' not found in file")
-            return False
-        
-        # Get content up to and including "Proof."
-        clean_content = content[:proof_pos + len("Proof.")]
-        
-        # Add a newline after "Proof." to start fresh
-        clean_content += "\n"
-        
-        # Show what we're removing
-        removed_content = content[proof_pos + len("Proof."):]
-        removed_lines = len(removed_content.splitlines())
-        removed_chars = len(removed_content.strip())
-        
-        print(f"📊 Cleaning statistics:")
-        print(f"   - Original file size: {len(content)} characters")
-        print(f"   - Clean file size: {len(clean_content)} characters")
-        print(f"   - Removed: {removed_chars} characters, {removed_lines} lines")
-        print(f"   - Proof position: {proof_pos}")
-        
-        # Write the cleaned content back
-        print(f"✍️ Writing cleaned content to: {file_path}")
-        with open(file_path, 'w', encoding='utf-8') as f:
-            f.write(clean_content)
-        
-        print("✅ File cleaned successfully!")
-        print(f"✅ Ready for fresh proof starting from 'Proof.'")
-        
-        # Show the end of the cleaned file for verification
-        print(f"\n📝 File now ends with:")
-        end_lines = clean_content.strip().split('\n')[-3:]
-        for i, line in enumerate(end_lines, len(end_lines)-2):
-            print(f"   {i}: {line}")
-        
-        return True
-        
-    except Exception as e:
-        print(f"❌ Error cleaning file: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
 
 @pytest.mark.llm
-def test_llm_proof_generation_with_controller():
-    """Test LLM-based proof generation using ProofController with built-in error handling"""
-    print("🤖🔧 Testing LLM-based proof generation using ProofController with error handling...")
-    
+def test_the_agent_runs_the_goal_and_keeps_its_books_straight(tmp_path):
+    config = ProofAgentConfig.from_file(str(config_file))
+    skip_if_libraries_missing(config)
+
+    coq_file = temp_example_copy("main_loop_invariant_2_established_Coq.v")
+    coq = CoqInterface(
+        file_path=str(coq_file),
+        workspace=config.coq.workspace or str(coq_file.parent),
+        library_paths=config.coq.library_paths,
+        auto_setup_coqproject=config.coq.auto_setup_coqproject,
+        coqproject_extra_options=config.coq.coqproject_extra_options,
+        timeout=config.coq.timeout,
+    )
+    assert coq.load(), f"load() failed: {coq.get_last_error()}"
+
     try:
-        # **CRITICAL: Clean the proof file first before loading**
-        print("🧹 Step 1: Clean the proof file to remove any completed proof")
-        clean_success = clean_proof_file(coq_file)
-        if not clean_success:
-            print("❌ Failed to clean proof file - cannot proceed")
-            return False
-        
-        # Load configuration from file
-        config = ProofAgentConfig.from_file(str(config_file))
-        print(f"✅ Loaded configuration from {config_file}")
-        print(f"📚 Library paths configured: {len(config.coq.library_paths)}")
-        for lib in config.coq.library_paths:
-            print(f"   - {lib['name']}: {lib['path']}")
-        print(f"⚙️ Auto setup CoqProject: {config.coq.auto_setup_coqproject}")
-        
-        # Initialize CoqInterface using configuration
-        coq_interface = CoqInterface(
-            file_path=str(coq_file),
-            workspace=config.coq.workspace or str(coq_file.parent),
-            library_paths=config.coq.library_paths,
-            auto_setup_coqproject=config.coq.auto_setup_coqproject,
-            coqproject_extra_options=config.coq.coqproject_extra_options,
-            timeout=config.coq.timeout
+        context_manager = ContextManager(
+            coq,
+            api_key=config.llm.api_key,
+            enable_history_context=getattr(config, "enable_history_context", True),
+            enable_context_search=getattr(config, "enable_context_search", True),
         )
-        
-        try:
-            print("✅ Created CoqInterface with auto-configured libraries")
-            
-            # Load the cleaned file
-            success = coq_interface.load()
-            if not success:
-                print(f"❌ Failed to load cleaned file: {coq_interface.get_last_error()}")
-                return False
-            
-            print("✅ Cleaned file loaded successfully")
-            
-            # Initialize ContextManager
-            print("🤖 Initializing LLM ContextManager...")
-            context_manager = ContextManager(
-                coq_interface,
-                api_key=config.llm.api_key,
-                enable_history_context=getattr(config, "enable_history_context", True),
-                enable_context_search=getattr(config, "enable_context_search", True),
-            )            
-            chat_session = context_manager.chat_session
+        assert context_manager.chat_session is not None
+        assert context_manager.model, "no model configured"
 
-            # Print comprehensive model information
-            print(f"🤖 LLM Configuration:")
-            print(f"   - Model: {context_manager.model}")
-            print(f"   - Temperature: {context_manager.temperature}")
-            print(f"   - Max tokens: {context_manager.max_tokens}")
-            print(f"   - Timeout: {context_manager.timeout}")
-            
-            # Also check chat session model if available
-            if hasattr(context_manager, 'chat_session') and context_manager.chat_session:
-                print(f"   - Chat session model: {context_manager.chat_session.model}")
-            
-            print("✅ ContextManager initialized successfully")
-            
-            # Check if context search is available
-            if hasattr(context_manager, 'context_search') and context_manager.context_search:
-                print("🔍 ✅ Context search is available")
-            else:
-                print("🔍 ⚠️ Context search not available")
-            
-            # Initialize ProofController with updated parameters
-            print("🔧 Initializing ProofController with error handling...")
-            controller = ProofController(
-                coq_interface=coq_interface,
-                context_manager=context_manager,
-                max_steps=100,  # Reasonable limit for testing
-                enable_error_feedback=getattr(config, "enable_error_feedback", True),
-                max_context_search=getattr(config, "max_context_search", 3),
-                output_dir=str(coq_file.parent),
+        controller = ProofController(
+            coq_interface=coq,
+            context_manager=context_manager,
+            max_steps=MAX_STEPS,
+            enable_recording=False,
+            enable_error_feedback=getattr(config, "enable_error_feedback", True),
+            max_context_search=getattr(config, "max_context_search", 3),
+            output_dir=str(tmp_path),
+        )
+
+        assert coq.get_proof_status()["proof_steps"] == 1, "load() left more than 'Proof.'"
+
+        success = controller.prove_theorem(THEOREM)
+
+        assert isinstance(success, bool)
+        assert success == controller.is_successful
+        assert 0 <= controller.gen_step_count <= MAX_STEPS
+
+        script = [s.text.strip() for s in coq.proof.steps]
+        assert script[0] == "Proof."
+
+        # Query commands are recorded as queries, not as proven tactics.
+        for query in controller.query_commands:
+            assert query.strip().startswith(QUERY_PREFIXES), query
+            assert query.strip() not in controller.successful_tactics
+        assert not set(controller.successful_tactics) & set(controller.failed_tactics)
+
+        # The run artifacts land in output_dir whatever the outcome.
+        tree_json = tmp_path / f"{THEOREM}_proof_tree_final.json"
+        assert (tmp_path / f"{THEOREM}_proof_tree_final.png").exists()
+        assert tree_json.exists()
+        assert json.loads(tree_json.read_text())["root"]["tactic"] == "Proof."
+
+        if success:
+            assert script[-1] == "Qed."
+            assert coq.proof_file.unproven_proofs == []
+            assert "Admitted." not in Path(coq.file_path).read_text(encoding="utf-8")
+        else:
+            assert coq.proof_file.unproven_proofs, (
+                "the run reported failure but the goal is closed"
             )
-            print("✅ ProofController initialized successfully")
-            
-            # Get proof status after loading cleaned file
-            status = coq_interface.get_proof_status()
-            print(f"📊 Proof status after cleaning: loaded={status.get('has_proof')}, steps={status.get('proof_steps')}")
-            
-            if not status.get("has_proof", False):
-                print("❌ No proof loaded properly after cleaning")
-                return False
-            
-            print(f"🎯 Working on clean proof with {status['proof_steps']} initial steps")
-            
-            # Show initial state after cleaning
-            print("\n" + "="*60)
-            print("🚀 INITIAL STATE (AFTER CLEANING)")
-            print("="*60)
-            print_steps(coq_interface)
-            print_current_goals(coq_interface)
-            
-            # Extract theorem name from the file
-            theorem_name = "main_loop_invariant_2_established"
-            print(f"🎯 Attempting to prove theorem: {theorem_name}")
-            
-            # Use ProofController to prove the theorem with built-in error handling
-            print(f"\n🤖🔧 Starting ProofController.prove_theorem() with built-in error handling...")
-            print(f"📋 Features enabled:")
-            print(f"   - Error feedback to LLM: ✅ Enabled")
-            print(f"   - Consecutive error tracking: ✅ Enabled") 
-            print(f"   - Context search on errors: ✅ Enabled")
-            print(f"   - Max steps: {controller.max_steps}")
-            
-            # Call the controller's prove_theorem method (now returns bool)
-            is_successful = controller.prove_theorem(theorem_name)
-            
-            # Analyze the results
-            print("\n" + "="*70)
-            print("🏁 PROOF CONTROLLER RESULTS (WITH BUILT-IN ERROR HANDLING)")
-            print("="*70)
-            
-            print(f"📊 Controller Statistics:")
-            print(f"   - Success: {is_successful}")
-            print(f"   - Steps taken: {controller.step_count}/{controller.max_steps}")
-            print(f"   - Successful tactics: {len(controller.successful_tactics)}")
-            print(f"   - Query commands: {len(controller.query_commands)}")
-            print(f"   - Failed tactics: {len(controller.failed_tactics)}")
-            
-            if controller.successful_tactics:
-                print(f"\n✅ Successful tactics used:")
-                for i, tactic in enumerate(controller.successful_tactics, 1):
-                    print(f"   {i}. {tactic}")
-            
-            # Add query commands display
-            if controller.query_commands:
-                print(f"\n🔍 Query commands used:")
-                for i, query in enumerate(controller.query_commands, 1):
-                    print(f"   {i}. {query}")
-            else:
-                print(f"\n🔍 Query commands used: None")
-            
-            if controller.failed_tactics:
-                print(f"\n❌ Failed tactics (with error handling):")
-                for i, tactic in enumerate(controller.failed_tactics, 1):
-                    print(f"   {i}. {tactic}")
-            
-            # Enhanced statistics display
-            total_commands = len(controller.successful_tactics) + len(controller.query_commands) + len(controller.failed_tactics)
-            if total_commands > 0:
-                tactic_success_rate = (len(controller.successful_tactics) / (len(controller.successful_tactics) + len(controller.failed_tactics)) * 100) if (len(controller.successful_tactics) + len(controller.failed_tactics)) > 0 else 0
-                print(f"\n📈 Detailed Statistics:")
-                print(f"   - Total commands attempted: {total_commands}")
-                print(f"   - Successful tactics: {len(controller.successful_tactics)}")
-                print(f"   - Query commands executed: {len(controller.query_commands)}")
-                print(f"   - Failed tactics: {len(controller.failed_tactics)}")
-                print(f"   - Tactic success rate: {tactic_success_rate:.1f}%")
-                print(f"   - Query usage: {len(controller.query_commands) / total_commands * 100:.1f}%")
-            
-            # Check final proof status
-            final_status = coq_interface.get_proof_status()
-            is_complete = is_successful
-            
-            print(f"\n🎯 Final Proof Status:")
-            print(f"   - Controller reports success: {is_successful}")
-            print(f"   - Proof steps: {final_status.get('proof_steps', 'unknown')}")
-            
-            try:
-                is_actually_complete = coq_interface.is_proof_complete()
-                print(f"   - CoqInterface reports complete: {is_actually_complete}")
-                is_complete = is_successful or is_actually_complete
-            except Exception as e:
-                print(f"   - Error checking completion: {e}")
-            
-            # Show final proof structure
-            print(f"\n📋 Final proof structure generated by controller:")
-            print_steps(coq_interface)
-            print_current_goals(coq_interface)
-            
-            # Evaluate the error handling effectiveness with enhanced metrics
-            if is_successful:
-                print("\n🎉 ✅ PROOF CONTROLLER WITH ERROR HANDLING SUCCESSFUL!")
-                print("   - Built-in error handling worked effectively")  
-                print("   - LLM learned from errors and corrected itself")
-                print("   - Context search provided useful assistance")
-                print(f"   - Used {len(controller.query_commands)} query commands for context")
-                print("   - Proof completed automatically")
-                print("   - SV-COMP theorem proven by AI with automatic error correction!")
-                
-            elif len(controller.successful_tactics) > len(controller.failed_tactics):
-                print("\n🔄 ⚡ PROOF CONTROLLER PARTIALLY SUCCESSFUL!")
-                print(f"   - {len(controller.successful_tactics)} tactics succeeded")
-                print(f"   - {len(controller.query_commands)} query commands used")
-                print(f"   - {len(controller.failed_tactics)} tactics failed (with error handling)")
-                print("   - Error handling helped but needs improvement")
-                print("   - Shows controller's error correction capability")
-                
-            else:
-                print("\n🔄 ❌ PROOF CONTROLLER STRUGGLED DESPITE ERROR HANDLING")
-                print(f"   - {len(controller.failed_tactics)} tactics failed")
-                print(f"   - {len(controller.query_commands)} query commands attempted")
-                print("   - Error handling was invoked but not fully effective")
-                print("   - May need improved error feedback strategies")
-                print("   - Controller framework is working but needs tuning")
-            
-            return is_complete
-        
-        finally:
-            # Always clean up
-            coq_interface.close()
-            
-    except Exception as e:
-        print(f"❌ ProofController test failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
-if __name__ == "__main__":
-    print("=" * 70)
-    print("🤖🔧 ProofController Error Handling Test")
-    print("=" * 70)
-    
-    # Check if config file exists
-    if not config_file.exists():
-        print(f"❌ Config file not found: {config_file}")
-        print("💡 Please create the config file with library_paths configuration")
-        sys.exit(1)
-    
-    # Check if example file exists
-    if not coq_file.exists():
-        print(f"❌ SV-COMP example file not found: {coq_file}")
-        print("💡 Please ensure the SV-COMP example file exists")
-        sys.exit(1)
-    
-    # Test ProofController with built-in error handling
-    print("🤖🔧 Testing ProofController with built-in error handling...")
-    controller_success = test_llm_proof_generation_with_controller()
-    
-    # Final summary
-    print("\n" + "="*70)
-    print("🏁 FINAL RESULTS (PROOFCONTROLLER WITH ERROR HANDLING)")
-    print("="*70)
-    
-    if controller_success:
-        print("🎉 SUCCESS: ProofController with error handling successfully proved the theorem!")
-        print("✅ Built-in error handling system working")
-        print("✅ LLM error feedback loop working")
-        print("✅ Consecutive error tracking working")
-        print("✅ Context search integration working")
-        print("✅ Controller architecture ready for deployment")
-        
-    else:
-        print("❌ PARTIAL SUCCESS: ProofController made progress with error handling")
-        print("✅ Controller framework working")
-        print("✅ Error handling system activated")
-        print("✅ LLM feedback mechanisms working")
-        print("✅ Error tracking and recovery attempted")
-        print("🔧 Error correction strategies need refinement")
-    
-    print(f"\n💡 This test validates:")
-    print(f"   - ProofController integration: {'✅ Working' if controller_success else '✅ Working'}")
-    print(f"   - Built-in error handling: {'✅ Working' if controller_success else '✅ Working'}")
-    print(f"   - LLM error feedback: {'✅ Working' if controller_success else '✅ Working'}")
-    print(f"   - Query command tracking: ✅ Working")
-    print(f"   - Consecutive error tracking: {'✅ Working' if controller_success else '✅ Working'}")
-    print(f"   - Context search on errors: {'✅ Working' if controller_success else '✅ Working'}")
-    print(f"   - Command categorization: ✅ Working")
-    print(f"   - Automatic error correction: {'✅ Complete' if controller_success else '🔄 Partial'}")
-    
-    # Show usage with controller
-    print(f"\n🚀 ProofController ready for:")
-    print(f"   - Automatic error handling and recovery")
-    print(f"   - LLM-driven error correction")
-    print(f"   - Context-aware error recovery")
-    print(f"   - Query command execution and tracking")
-    print(f"   - Comprehensive command statistics")
-    print(f"   - Intelligent proof search with feedback")
-    print(f"   - Production-ready automated proving")
-    
-    # Exit with appropriate code
-    if controller_success:
-        sys.exit(0)  # Complete success
-    else:
-        sys.exit(2)  # Partial success (framework working, needs tuning)
+            # A failed run still has to leave the session usable.
+            assert coq.get_goal_str().strip()
+    finally:
+        coq.close()
