@@ -257,24 +257,24 @@ def test_large_results_are_summarized():
     )
 
 
-def test_relevance_score_flags_empty_results():
-    """relevance_score is a hit/miss flag, not a ranking score.
+def test_a_search_with_no_hits_reports_no_results():
+    """A miss is told apart from a hit by its content, nothing else.
 
-    _create_search_result sets it to 1.0 whenever the content does not say
-    "No results found" and 0.0 otherwise, so that is all it can be asserted to
-    mean. The actual ranking lives in ResultReducer._rank_entries.
+    _create_search_result passes Rocq's own wording through, so "No results
+    found." is the whole miss signal. Ranking of real hits is a separate thing
+    and lives in ResultReducer._rank_entries.
     """
     coq_search = CoqCommandSearch(get_interface())
 
     hit = coq_search.search_lemma("Z.abs", "0 <= Z.abs x")
-    assert hit.relevance_score == 1.0
     assert hit.source == "coq_command"
+    assert hit.result_size > 0 and "No results found" not in hit.content
 
     miss = coq_search.search_lemma("definitely_not_a_lemma_xyz")
-    assert miss.relevance_score == 0.0, (
-        f"a search with no hits should score 0.0, got {miss.relevance_score}"
+    assert "No results found" in miss.content, (
+        f"a search with no hits should say so, got {miss.content[:200]!r}"
     )
-    print(f"\n🎯 relevance: hit={hit.relevance_score} miss={miss.relevance_score}")
+    print(f"\n🎯 hit={hit.result_size} chars, miss={miss.content.strip()!r}")
 
 
 def test_goal_context_changes_the_summary():
@@ -369,7 +369,7 @@ TESTS = [
     test_query_commands_return_real_results,
     test_command_search_returns_real_content,
     test_large_results_are_summarized,
-    test_relevance_score_flags_empty_results,
+    test_a_search_with_no_hits_reports_no_results,
     test_goal_context_changes_the_summary,
     test_keyword_extraction,
     test_goal_context_reranks_entries,

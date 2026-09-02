@@ -97,7 +97,6 @@ def test_context_search_wrapper_returns_the_same_result_as_the_command(coq):
 
     assert through_wrapper.content == direct.content
     assert through_wrapper.source == "coq_command"
-    assert through_wrapper.relevance_score == 1.0
     assert "Inductive bool : Set" in through_wrapper.content
 
 
@@ -108,13 +107,13 @@ def test_execute_coq_query_dispatches_on_the_query_type(coq):
     by_identifier = context_search.execute_coq_query(
         "search", identifier="Z.abs", goal_context="0 <= Z.abs x"
     )
-    assert by_identifier.relevance_score == 1.0, by_identifier.content[:200]
+    assert by_identifier.result_size > 0, by_identifier.content[:200]
     assert "Z.abs" in by_identifier.content
 
     by_pattern = context_search.execute_coq_query(
         "search", pattern="(_ <= _)", goal_context="x <= y"
     )
-    assert by_pattern.relevance_score == 1.0
+    assert by_pattern.result_size > 0
     assert by_pattern.original_size > by_identifier.original_size, (
         "a wildcard pattern should match more than one identifier"
     )
@@ -124,14 +123,13 @@ def test_execute_coq_query_dispatches_on_the_query_type(coq):
 
     # Missing parameters are reported, not guessed at.
     missing = context_search.execute_coq_query("search")
-    assert missing.relevance_score == 0.0
     assert "requires either identifier or pattern" in missing.content
     assert missing.metadata["error"] == "Missing parameters"
 
 
-def test_a_search_that_matches_nothing_is_scored_zero(coq):
+def test_a_search_that_matches_nothing_reports_no_results(coq):
     """An empty result must not reach the LLM looking like a hit."""
     result = ContextSearch(coq).search("Search definitely_not_a_lemma_xyz.")
 
-    assert result.relevance_score == 0.0
-    assert result.metadata.get("failed") is None, "an empty result is not a failure"
+    assert "No results found" in result.content, result.content[:200]
+    assert result.metadata.get("error") is None, "an empty result is not a failure"

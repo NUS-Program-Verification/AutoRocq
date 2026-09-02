@@ -13,10 +13,9 @@ from utils.logger import setup_logger
 
 @dataclass
 class SearchResult:
-    """Represents a search result with relevance score."""
+    """Represents a search result and how it was reduced."""
     content: str
     source: str  # 'coq_command'
-    relevance_score: float
     metadata: Dict[str, Any] = None
     result_size: int = 0
     original_size: int = 0  # Track original size before reduction
@@ -334,7 +333,8 @@ class CoqCommandSearch:
         content is None when CoqInterface.search() failed. Handled here rather
         than at each of the eight call sites, since all of them funnel through
         this one function. A failure must never reach the LLM looking like a
-        confident result, so it is scored 0.0 and flagged in metadata.
+        confident result, so its content says so and the reason is recorded
+        in metadata['error'].
         """
         if content is None:
             error = self.coq.get_last_error() or "query failed"
@@ -342,8 +342,7 @@ class CoqCommandSearch:
             return SearchResult(
                 content=f"Query failed: {error}",
                 source='coq_command',
-                relevance_score=0.0,
-                metadata={'query': query, 'type': query_type, 'failed': True, 'error': error},
+                metadata={'query': query, 'type': query_type, 'error': error},
             )
 
         original_size = len(content) if content else 0
@@ -359,7 +358,6 @@ class CoqCommandSearch:
         return SearchResult(
             content=reduced_content,
             source='coq_command',
-            relevance_score=1.0 if reduced_content and "No results found" not in reduced_content else 0.0,
             metadata={
                 'query': query, 
                 'type': query_type,
@@ -455,7 +453,6 @@ class CoqCommandSearch:
                     return SearchResult(
                         content=error_msg,
                         source='coq_command',
-                        relevance_score=0.0,
                         metadata={'query_type': query_type, 'error': 'Missing parameters'},
                         result_size=len(error_msg)
                     )
@@ -467,7 +464,6 @@ class CoqCommandSearch:
                     return SearchResult(
                         content=error_msg,
                         source='coq_command',
-                        relevance_score=0.0,
                         metadata={'query_type': query_type, 'error': 'Missing identifier'},
                         result_size=len(error_msg)
                     )
@@ -481,7 +477,6 @@ class CoqCommandSearch:
                     return SearchResult(
                         content=error_msg,
                         source='coq_command',
-                        relevance_score=0.0,
                         metadata={'query_type': query_type, 'error': 'Missing identifier'},
                         result_size=len(error_msg)
                     )
@@ -493,7 +488,6 @@ class CoqCommandSearch:
                     return SearchResult(
                         content=error_msg,
                         source='coq_command',
-                        relevance_score=0.0,
                         metadata={'query_type': query_type, 'error': 'Missing identifier'},
                         result_size=len(error_msg)
                     )
@@ -505,7 +499,6 @@ class CoqCommandSearch:
                     return SearchResult(
                         content=error_msg,
                         source='coq_command',
-                        relevance_score=0.0,
                         metadata={'query_type': query_type, 'error': 'Missing term'},
                         result_size=len(error_msg)
                     )
@@ -514,7 +507,6 @@ class CoqCommandSearch:
                 return SearchResult(
                     content=error_msg,
                     source='coq_command',
-                    relevance_score=0.0,
                     metadata={'query_type': query_type, 'error': 'Unknown query type'},
                     result_size=len(error_msg)
                 )
@@ -523,7 +515,6 @@ class CoqCommandSearch:
             return SearchResult(
                 content=error_msg,
                 source='coq_command',
-                relevance_score=0.0,
                 metadata={'query_type': query_type, 'error': str(e)},
                 result_size=len(error_msg)
             )
@@ -564,7 +555,6 @@ class ContextSearch:
             return SearchResult(
                 content=error_message,
                 source='coq_command',
-                relevance_score=0.0,
                 metadata={'query': query, 'error': str(e)},
                 result_size=len(error_message)
             )

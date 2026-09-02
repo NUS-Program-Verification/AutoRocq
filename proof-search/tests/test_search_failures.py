@@ -130,7 +130,7 @@ def test_print_branch_failure_returns_none():
 
 
 def test_failed_query_never_reaches_the_llm_as_a_good_result():
-    """The whole point: a backend failure must not score like a real hit."""
+    """The whole point: a backend failure must not look like a real hit."""
     error = "Error executing Search: lsp endpoint died"
     coq_search = CoqCommandSearch(FakeCoq(None, error))
 
@@ -144,11 +144,11 @@ def test_failed_query_never_reaches_the_llm_as_a_good_result():
         ("print_assumptions", coq_search.print_assumptions("Z.abs")),
         ("auto_search", coq_search.auto_search("Search Z.abs.")),
     ]:
-        assert result.relevance_score == 0.0, f"{label}: scored {result.relevance_score}"
-        assert result.metadata["failed"] is True, label
+        assert result.content.startswith("Query failed:"), f"{label}: {result.content!r}"
         assert error in result.content, f"{label}: {result.content!r}"
+        assert result.metadata["error"] == error, label
         assert result.original_size == 0 and result.result_size == 0, label
-        print(f"  ✅ {label:18} relevance=0.0, flagged failed")
+        print(f"  ✅ {label:18} content says it failed, reason in metadata")
 
 
 def test_successful_query_is_unaffected():
@@ -156,16 +156,16 @@ def test_successful_query_is_unaffected():
     content = "Z.abs_0: Z.abs 0 = 0\nZ.abs_nonneg: forall n : int, 0 <= Z.abs n"
     result = CoqCommandSearch(FakeCoq(content)).search_lemma("Z.abs")
 
-    assert result.relevance_score == 1.0
-    assert result.metadata.get("failed") is None
     assert result.content == content
+    assert result.metadata.get("error") is None
     assert result.original_size == len(content)
 
-    # A genuine empty result stays scored 0.0, as before.
+    # A genuine empty result is a success. It carries Rocq's own wording and
+    # records no error, and that is what tells it apart from a failed query.
     empty = CoqCommandSearch(FakeCoq("No results found.")).search_lemma("nope")
-    assert empty.relevance_score == 0.0
-    assert empty.metadata.get("failed") is None, "an empty result is not a failure"
-    print("  ✅ success -> 1.0; genuine empty -> 0.0 but not flagged failed")
+    assert empty.content == "No results found."
+    assert empty.metadata.get("error") is None, "an empty result is not a failure"
+    print("  ✅ success -> content passed through; genuine empty -> 'No results found.'")
 
 
 TESTS = [
