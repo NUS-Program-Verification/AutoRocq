@@ -145,12 +145,21 @@ class FakeCoq:
         self.result = result
         self.error = error
         self.proof_file = object()
+        self.goal_contexts = []
 
-    def search(self, _query):
+    def search(self, _query, goal_context=""):
+        self.goal_contexts.append(goal_context)
         return self.result
 
     def get_last_error(self):
         return self.error
+
+
+class FakeProofState:
+    GOAL = "0 <= Z.abs x"
+
+    def get_goal_str(self):
+        return self.GOAL
 
 
 def test_failed_command_search_preserves_the_error():
@@ -165,6 +174,7 @@ def test_failed_command_search_preserves_the_error():
 def make_context_manager(result):
     manager = object.__new__(ContextManager)
     manager.context_search = FakeCoq(result)
+    manager.coq = FakeProofState()
     manager.enable_context_search = True
     manager.last_action_info = {}
     manager.logger = setup_logger("test_context_search")
@@ -183,14 +193,22 @@ def test_context_manager_distinguishes_failure_from_empty_results():
         metadata={},
         result_size=len("No results found."),
     )
+    hit = SearchResult(
+        content="Z.abs_nonneg: forall n : Z, 0 <= Z.abs n",
+        source="coq_command",
+        metadata={},
+        result_size=len("Z.abs_nonneg: forall n : Z, 0 <= Z.abs n"),
+    )
 
-    for result, expected_success in [(failure, False), (empty, True)]:
-        response, success = make_context_manager(result).handle_query_call(
+    for result, expected_success in [(failure, False), (empty, True), (hit, True)]:
+        manager = make_context_manager(result)
+        response, success = manager.handle_query_call(
             "Search Z.abs.", "call-1"
         )
 
         assert success is expected_success
         assert result.content in response
+        assert manager.context_search.goal_contexts == [FakeProofState.GOAL]
 
 
 class FakeContextManager:

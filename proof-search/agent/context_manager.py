@@ -602,6 +602,31 @@ class ContextManager:
                
         return tactic_content
 
+    def _tool_role_problem(self, tool_call_id) -> Optional[str]:
+        """Why this cannot be sent as a tool response, or None if it can.
+
+        These five checks were asserts wrapped in `except AssertionError` --
+        validation written as a crash and then caught. `python -O` strips
+        asserts, which would take the checks and their fallback with them and
+        send a tool response the thread has no tool call for.
+        """
+        if tool_call_id is None:
+            return "tool_call_id is required for tool role"
+
+        messages = self.chat_session.messages
+        if not messages:
+            return "empty message thread"
+
+        last = messages[-1]
+        if last.get("role") != "assistant":
+            return "last message must be an assistant message"
+        if "tool_calls" not in last:
+            return "last assistant message must have tool_calls"
+        if len(last["tool_calls"]) != 1:
+            return "last assistant message must have exactly one tool call"
+
+        return None
+
     def get_action(self, context_prompt: str, role: str = "user", tool_call_id: str = None, should_optimize: bool = False) -> tuple[dict, str]:
         """
         Prompt the LLM with user prompt or tool response to generate an tool call.
@@ -628,15 +653,9 @@ class ContextManager:
                 self.logger.info(f"Tool response:\n{context_prompt}")
                 # Validate that if role is "tool", we must have a tool_call_id
                 # and the last message must be an assistant message with tool_calls
-                try:
-                    assert tool_call_id is not None, "tool_call_id is required for tool role"
-                    assert self.chat_session.messages, "empty message thread"
-                    assert self.chat_session.messages[-1].get("role") == "assistant", "last message must be an assistant message"
-                    assert "tool_calls" in self.chat_session.messages[-1], "last assistant message must have tool_calls"
-                    assert len(self.chat_session.messages[-1]["tool_calls"]) == 1, "last assistant message must have exactly one tool call"
-                except AssertionError as e:
-                    # This shouldn't happen if we checked above, but fallback
-                    self.logger.error(f"❌ {e}")
+                problem = self._tool_role_problem(tool_call_id)
+                if problem:
+                    self.logger.error(f"❌ {problem}")
                     self.logger.warning("🔄 Sending as user message instead")
                     role = "user"
                     tool_call_id = None
@@ -722,7 +741,10 @@ class ContextManager:
         if not self.context_search:
             return "Context search not available", False
 
-        search_result = self.context_search.search(query)
+        goal_context = self.coq.get_goal_str() if self.coq else ""
+        search_result = self.context_search.search(
+            query, goal_context=goal_context or ""
+        )
         error = (search_result.metadata or {}).get('error')
         if error:
             self.logger.warning(f"Query failed: {query} -> {error}")
@@ -732,7 +754,7 @@ class ContextManager:
             return "No results found.", True
 
         return search_result.content, True
-    
+
     def should_give_up(self) -> bool:
         """Determine if the agent should give up on the proof."""
         give_up_keywords = ["unprovable", "not provable", "unable to proceed", "give up", "abort"]
