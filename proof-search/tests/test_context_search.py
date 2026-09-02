@@ -100,25 +100,18 @@ def load_config():
     return ProofAgentConfig.from_file(str(config_file))
 
 
-# CoqInterface.search() never raises -- it returns its failures as ordinary
-# strings, so a test that only checks "did a string come back" passes on every
-# one of them. See backend/coq_interface.py::search / _run_aux_query.
-QUERY_ERRORS = (
-    "aux_file not accessible",
-    "Empty query",
-    "No search term provided",
-    "No results found.",
-    "Unsupported query type:",
-    "Error executing ",
-    "Query error:",
-)
-
-
 def assert_real_result(query, result):
-    """Fail on the failure strings search() returns in place of raising."""
+    """Fail on anything that is not a genuine query hit.
+
+    CoqInterface.search() returns None on failure (reason on last_error), and
+    CoqCommandSearch turns that into content prefixed "Query failed:". Neither
+    is a result, and nor is a successful-but-empty "No results found." for the
+    queries asserted here.
+    """
+    assert result is not None, f"{query}: query failed (search returned None)"
     assert result, f"{query}: empty result"
-    for sentinel in QUERY_ERRORS:
-        assert not result.startswith(sentinel), f"{query}: query failed -> {result!r}"
+    assert not result.startswith("Query failed:"), f"{query}: {result}"
+    assert result != "No results found.", f"{query}: query found nothing"
 
 
 _interface = None
@@ -221,6 +214,7 @@ def test_command_search_returns_real_content():
 
         label = f"{method_name}({argument})"
         assert_real_result(label, result.content)
+        assert not result.metadata.get("failed"), f"{label}: {result.metadata}"
         for fragment in expected:
             assert fragment in result.content, (
                 f"{label}: expected {fragment!r}, got {result.content[:300]!r}"
