@@ -363,12 +363,23 @@ class CoqInterface:
     
     @staticmethod
     def format_hypotheses(goal) -> str:
-        """One "names : type" line per hypothesis of a coqpyt Goal."""
+        """One line per hypothesis of a coqpyt Goal, the way Rocq prints them.
+
+        A let-bound hypothesis carries its body in Hyp.definition and reads
+        "y := true : bool"; dropping it would leave the model the type of a
+        value it cannot see, which is the difference between knowing `subst`
+        will fire and guessing.
+        """
         lines = []
         for hyp in getattr(goal, 'hyps', None) or []:
             names = ', '.join(getattr(hyp, 'names', None) or [])
             ty = getattr(hyp, 'ty', '')
-            lines.append(f"{names} : {ty}" if names else str(ty))
+            definition = getattr(hyp, 'definition', None)
+            if not names:
+                lines.append(str(ty))
+                continue
+            head = f"{names} := {definition}" if definition else names
+            lines.append(f"{head} : {ty}")
         return '\n'.join(lines)
 
     def get_raw_hypothesis(self):

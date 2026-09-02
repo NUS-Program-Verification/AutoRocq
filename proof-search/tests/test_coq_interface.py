@@ -113,6 +113,25 @@ def test_tactics_drive_the_proof_to_qed(coq):
 
 
 
+
+def test_a_let_bound_hypothesis_keeps_its_body(coq):
+    """`set` introduces "y := true : bool", not "y : bool".
+
+    coqpyt keeps the body on Hyp.definition and leaves it out of its own repr,
+    so rendering the context has to put it back: without it the model sees a
+    bool called y whose value it has no way to recover.
+    """
+    assert coq.apply_tactic(" intros b."), coq.get_last_error()
+    assert coq.apply_tactic(" set (y := true)."), coq.get_last_error()
+
+    hyps = coq.get_subgoals()[0].hyps
+    plain = [h for h in hyps if h.definition is None]
+    bound = [h for h in hyps if h.definition is not None]
+    assert plain and bound, [(h.names, h.definition) for h in hyps]
+
+    rendered = coq.get_hypothesis().splitlines()
+    assert rendered == ["b : bool", "y := true : bool"], rendered
+
 def test_a_bad_tactic_fails_without_breaking_the_session(coq):
     """A rejected tactic must report why and leave the proof where it was."""
     steps_before = coq.get_current_step_number()
