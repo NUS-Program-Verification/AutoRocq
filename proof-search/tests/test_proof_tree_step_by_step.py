@@ -81,7 +81,8 @@ def test_proof_tree_evolution():
             coq_interface=coq_interface,
             context_manager=context_manager,
             max_steps=100,
-            enable_recording=False
+            enable_recording=False,
+            output_dir=str(output_dir)
         )
         print("✅ ProofController created")
         

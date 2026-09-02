@@ -295,6 +295,7 @@ def initialize_components(args, config: ProofAgentConfig, logger) -> Dict[str, A
             enable_hammer=config.enable_hammer,
             max_context_search=config.max_context_search,
             history_file=str(history_file),
+            output_dir=config.output_dir,
             interactive=config.interactive
         )
         
@@ -617,6 +618,9 @@ def main():
     
     # Setup output directory
     output_dir = setup_output_directory(args.output_dir or config.output_dir)
+
+    # Record the resolved directory so components write their artifacts there.
+    config.output_dir = str(output_dir)
     
     # Use absolute path
     args.proof_file = str(Path(args.proof_file).resolve())
