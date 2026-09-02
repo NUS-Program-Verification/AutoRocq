@@ -11,8 +11,9 @@ The old version tallied everything the run produced, printed a verdict in three
 tiers ("SUCCESSFUL" / "PARTIALLY SUCCESSFUL" / "STRUGGLED"), and returned
 is_complete -- which pytest ignores, so all three tiers passed identically, as
 did a run that raised before the model was ever called. Like its sibling it
-printed `controller.step_count`, which does not exist; the AttributeError was
-swallowed by the blanket `except Exception`.
+printed `controller.step_count`, which at the time did not exist; the
+AttributeError was swallowed by the blanket `except Exception`. That is the
+counter's name now.
 """
 
 import json
@@ -79,7 +80,7 @@ def test_the_agent_runs_the_goal_and_keeps_its_books_straight(tmp_path):
 
         assert isinstance(success, bool)
         assert success == controller.is_successful
-        assert 0 <= controller.gen_step_count <= MAX_STEPS
+        assert 0 <= controller.step_count <= MAX_STEPS
 
         script = [s.text.strip() for s in coq.proof.steps]
         assert script[0] == "Proof."
