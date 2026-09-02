@@ -151,7 +151,8 @@ def test_llm_proof_generation_with_controller():
             context_manager = ContextManager(
                 coq_interface,
                 api_key=config.llm.api_key,
-                enable_history_context=getattr(config, "enable_history_context", True)
+                enable_history_context=getattr(config, "enable_history_context", True),
+                enable_context_search=getattr(config, "enable_context_search", True),
             )            
             chat_session = context_manager.chat_session
 
@@ -180,7 +181,6 @@ def test_llm_proof_generation_with_controller():
                 coq_interface=coq_interface,
                 context_manager=context_manager,
                 max_steps=100,  # Reasonable limit for testing
-                enable_context_search=getattr(config, "enable_context_search", True),
                 enable_error_feedback=getattr(config, "enable_error_feedback", True),
                 max_context_search=getattr(config, "max_context_search", 3),
             )
