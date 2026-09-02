@@ -93,9 +93,7 @@ def test_the_known_good_proof_goes_through_to_qed(coq):
     assert "Search Z.abs." in steps
 
     assert coq.proof_file.unproven_proofs == [], "the goal is still unproven"
-    # Known defect, recorded rather than fixed: is_proof_complete() reads
-    # unproven_proofs, so it reports False precisely once Qed has landed.
-    assert not coq.is_proof_complete()
+    assert coq.is_proof_complete(), "the proof is closed but reported incomplete"
 
 
 def test_the_finished_proof_is_written_back_to_the_file(coq):
