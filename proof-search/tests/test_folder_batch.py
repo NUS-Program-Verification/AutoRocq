@@ -163,110 +163,61 @@ def prove_single_file(
     return False
 
 @pytest.mark.llm
-def test_folder_batch():
-    """Test all .v files listed in lemmas.txt with simple progress output."""
-    print("🚀 Batch Proof Testing")
-    print("="*60)
-    
-    try:
-        # Load configuration
-        if not config_file.exists():
-            print(f"❌ Config file not found: {config_file}")
-            return False
-        
-        config = ProofAgentConfig.from_file(str(config_file))
-        
-        # Read .v files from lemmas.txt
-        v_files = read_v_files_from_lemmas(str(lemmas_txt), str(benchmark_folder))
-      
-        if not v_files:
-            print(f"❌ No .v files found in: {lemmas_txt}")
-            return False
-        
-        total_files = len(v_files)
-        proved_count = 0
-        failed_count = 0
-        
-        # Each attempt is saved here so it can be re-verified independently
-        # later, instead of being overwritten by the next run.
-        results_dir = PROJECT_ROOT / "results" / f"batch-{datetime.now():%Y%m%d-%H%M%S}"
-        results_dir.mkdir(parents=True, exist_ok=True)
-        print(f"💾 Saving proofs to: {results_dir}")
-        
-        print(f"📁 Found {total_files} .v files listed in {lemmas_txt}")
-        print(f"🚀 Starting batch proof testing...")
-        print()
-        
-        # Process each file
-        for i, coq_file in enumerate(v_files, 1):
-            rel_path = os.path.relpath(coq_file, str(benchmark_folder))
-            # --- Add this line to clearly show which file is being proved ---
-            print(f"\n=== Proving file [{i}/{total_files}]: {rel_path} | Proved: {proved_count} | Failed: {failed_count} | Remaining: {total_files - i} ===")
-            start_time = time.time()
-            success = prove_single_file(
-                coq_file, config, results_dir, rel_path.replace(os.sep, "__")
-            )
-            elapsed = time.time() - start_time
+def test_folder_batch(tmp_path):
+    """Prove every .v file listed in the ablation list and check the tally.
 
-            # Update counters
-            if success:
-                proved_count += 1
-                result_text = "Yes"
-            else:
-                failed_count += 1
-                result_text = "No"
-            
-            remaining = total_files - i
-            success_rate = proved_count / i * 100
-            
-            #exit(1)
-            # Print simple progress line
-            #print(f"{rel_path:<50} {result_text:<3} Proved - [{proved_count}] Failed - [{failed_count}] Remaining [{remaining}] Progress [{i}/{total_files}] Success rate [{success_rate:.2f}%]")
-            
-        # Final summary
-        print()
-        print("="*60)
-        print("🏁 BATCH TESTING COMPLETE")
-        print("="*60)
-        print(f"📊 Total files: {total_files}")
-        print(f"✅ Proved: {proved_count}")
-        print(f"❌ Failed: {failed_count}")
-        print(f"📈 Success rate: {proved_count/total_files*100:.2f}%")
-        
-        return proved_count > 0
-        
-    except Exception as e:
-        print(f"❌ Batch test failed: {e}")
-        return False
+    This is the ablation experiment, not a unit test: it runs the whole agent
+    over ~70 benchmark goals and costs real API time. It stays behind the `llm`
+    marker for that reason.
 
-if __name__ == "__main__":
-    print("=" * 70)
-    print("🚀 Folder Batch Proof Testing")
-    print("=" * 70)
+    The old version counted proved/failed, printed a success rate, and returned
+    `proved_count > 0` -- which pytest ignores. A run in which every single goal
+    failed, or in which the lemma list resolved to nothing, passed exactly like
+    a clean sweep. It also wrote its results under the repo's results/ rather
+    than into a temp directory.
+    """
+    assert config_file.exists(), f"config not found: {config_file}"
+    config = ProofAgentConfig.from_file(str(config_file))
 
-    # Check if config file exists
-    if not config_file.exists():
-        print(f"❌ Config file not found: {config_file}")
-        print("💡 Please create the config file with library_paths configuration")
-        sys.exit(1)
-    
-    # Check if folder exists
-    if not benchmark_folder.exists():
-        print(f"❌ Benchmark folder not found: {benchmark_folder}")
-        print("💡 Please ensure the benchmark folder exists")
-        sys.exit(1)
-    
-    # Check if lemmas file exists
     if not lemmas_txt.exists():
-        print(f"❌ Lemmas file not found: {lemmas_txt}")
-        sys.exit(1)
-    
-    # Test all files in folder
-    success = test_folder_batch()
-    
-    if success:
-        print("\n🎉 Batch testing completed with some successes!")
-        sys.exit(0)
-    else:
-        print("\n❌ Batch testing failed or no successes")
-        sys.exit(1)
+        pytest.skip(f"benchmark list not checked out: {lemmas_txt}")
+
+    v_files = read_v_files_from_lemmas(str(lemmas_txt), str(benchmark_folder))
+    assert v_files, f"no .v files resolved from {lemmas_txt}"
+
+    # Each attempt is saved so it can be re-verified independently later,
+    # instead of being overwritten by the next run.
+    results_dir = tmp_path / f"batch-{datetime.now():%Y%m%d-%H%M%S}"
+    results_dir.mkdir(parents=True)
+
+    outcomes = {}
+    for i, coq_file in enumerate(v_files, 1):
+        rel_path = os.path.relpath(coq_file, str(benchmark_folder))
+        print(f"\n=== [{i}/{len(v_files)}] {rel_path} ===")
+        start = time.time()
+        success = prove_single_file(
+            coq_file, config, results_dir, rel_path.replace(os.sep, "__")
+        )
+        assert isinstance(success, bool), f"{rel_path}: got {success!r}"
+        outcomes[rel_path] = success
+        print(f"    {'proved' if success else 'failed'} in {time.time() - start:.1f}s")
+
+    proved = [name for name, ok in outcomes.items() if ok]
+    print(f"\n{len(proved)}/{len(v_files)} proved")
+
+    # Every listed file was attempted and got a verdict.
+    assert len(outcomes) == len(v_files)
+
+    # Every attempt left a saved artefact, whether or not it was proved.
+    saved = list(results_dir.iterdir())
+    assert saved, "no results were written"
+
+    # The benchmark sources are never edited: each attempt runs on a copy.
+    for coq_file in v_files:
+        assert "Admitted." in Path(coq_file).read_text(encoding="utf-8"), (
+            f"{coq_file} was modified in place"
+        )
+
+    # A run that proves nothing at all means the agent is broken, not that the
+    # benchmark got harder.
+    assert proved, f"not one of {len(v_files)} goals was proved"

@@ -1,174 +1,110 @@
-import os
+"""
+ProofController.prove_theorem() end to end against a live model.
+
+The model is not deterministic, so this asserts the controller's own contract
+rather than "the proof succeeds": the return value agrees with is_successful,
+the step budget is respected, the bookkeeping lists match the tactics that were
+applied, the run artifacts are written, and the final proof state agrees with
+the verdict.
+
+The old version returned True/False from every branch -- pytest ignores that --
+so it passed whether prove_theorem() proved the goal, crashed, or was never
+reached because clean_proof_file() failed first. It also printed
+`controller.step_count`, an attribute ProofController does not have; the
+resulting AttributeError was swallowed by the blanket `except Exception` and
+reported as "❌ Test failed", which still passed.
+"""
+
+import json
 import sys
 from pathlib import Path
 
 import pytest
 
-# Add project root to path
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from backend.coq_interface import CoqInterface
 from agent.context_manager import ContextManager
 from agent.proof_controller import ProofController
+from backend.coq_interface import CoqInterface
+from tests.test_utils import skip_if_libraries_missing, temp_example_copy
 from utils.config import ProofAgentConfig
-from tests.test_utils import temp_example_copy
 
-# --- CONFIGURATION ---
-coq_file = temp_example_copy("main_loop_invariant_2_established_Coq.v")
 config_file = PROJECT_ROOT / "configs" / "default_config.json"
+THEOREM = "wp_goal"
+MAX_STEPS = 15
 
-def clean_proof_file(file_path):
-    """Clean the proof file by removing everything after 'Proof.'"""
-    try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-        
-        proof_pos = content.find("Proof.")
-        if proof_pos == -1:
-            print("❌ 'Proof.' not found in file")
-            return False
-        
-        clean_content = content[:proof_pos + len("Proof.")] + "\n"
-        
-        with open(file_path, 'w', encoding='utf-8') as f:
-            f.write(clean_content)
-        
-        print("✅ Proof file cleaned successfully")
-        return True
-        
-    except Exception as e:
-        print(f"❌ Error cleaning file: {e}")
-        return False
 
 @pytest.mark.llm
-def test_prove_theorem():
-    """Test the prove_theorem API with controller"""
-    print("\n🧪 TESTING PROVE_THEOREM API")
-    print("=" * 50)
-    
+def test_prove_theorem_reports_an_outcome_that_matches_the_proof(tmp_path):
+    config = ProofAgentConfig.from_file(str(config_file))
+    skip_if_libraries_missing(config)
+
+    coq_file = temp_example_copy("main_loop_invariant_2_established_Coq.v")
+    coq = CoqInterface(
+        file_path=str(coq_file),
+        workspace=config.coq.workspace or str(coq_file.parent),
+        library_paths=config.coq.library_paths,
+        auto_setup_coqproject=config.coq.auto_setup_coqproject,
+        timeout=config.coq.timeout,
+    )
+    assert coq.load(), f"load() failed: {coq.get_last_error()}"
+
     try:
-        # Clean the proof file first
-        print("🧹 Step 1: Clean proof file")
-        if not clean_proof_file(coq_file):
-           return False
-        
-        # Load configuration
-        print("📖 Step 2: Load configuration")
-        config = ProofAgentConfig.from_file(str(config_file))
-        print(f"✅ Configuration loaded")
-        
-        # Create CoqInterface
-        print("🔧 Step 3: Create CoqInterface")
-        coq_interface = CoqInterface(
-            file_path=str(coq_file),
-            workspace=config.coq.workspace or str(coq_file.parent),
-            library_paths=config.coq.library_paths,
-            auto_setup_coqproject=config.coq.auto_setup_coqproject,
-            timeout=config.coq.timeout
-        )
-        
-        try:
-            # Load the file
-            print("📂 Step 4: Load Coq file")
-            if not coq_interface.load():
-                print(f"❌ Failed to load file: {coq_interface.get_last_error()}")
-                return False
-            print("✅ Coq file loaded")
-            
-            # Create ContextManager
-            print("🤖 Step 5: Create ContextManager")
-            context_manager = ContextManager(
-                coq_interface,
+        controller = ProofController(
+            coq_interface=coq,
+            context_manager=ContextManager(
+                coq,
                 api_key=config.llm.api_key,
                 enable_history_context=getattr(config, "enable_history_context", True),
-                enable_context_search=False,  # disabled for this simple test
-            )
-            print("✅ ContextManager created")
-            
-            # Create controller with updated parameters
-            print("🎮 Step 6: Create proof controller")
-            controller = ProofController(
-                coq_interface=coq_interface,
-                context_manager=context_manager,
-                max_steps=15,  # Enough steps for our sequence
-                output_dir=str(coq_file.parent),
-            )
-            print("✅ Controller created")
-            
-            # Show initial state
-            print("\n📊 Initial proof state:")
-            initial_goals = coq_interface.get_goal_str()
-            print(f"   Goals: {initial_goals[:100]}...")
-            
-            # Use prove_theorem API
-            print("\n🚀 Step 7: Call prove_theorem API")
-            print("=" * 50)
-            success = controller.prove_theorem("wp_goal")
-            
-            # Show results
-            print("\n🏁 PROOF RESULTS")
-            print("=" * 50)
-            
-            print(f"✅ Success: {success}")
-            print(f"📊 Steps taken: {controller.step_count}/{controller.max_steps}")
-            
-            if controller.successful_tactics:
-                print(f"✅ Successful tactics ({len(controller.successful_tactics)}):")
-                for i, tactic in enumerate(controller.successful_tactics, 1):
-                    print(f"   {i}. {tactic}")
-            
-            if controller.failed_tactics:
-                print(f"❌ Failed tactics ({len(controller.failed_tactics)}):")
-                for i, tactic in enumerate(controller.failed_tactics, 1):
-                    print(f"   {i}. {tactic}")
-            
-            # Verify proof completion
-            final_status = coq_interface.get_proof_completion_status()
-            print(f"\n🎯 Final proof status:")
-            print(f"   Complete: {final_status.get('is_complete', False)}")
-            print(f"   Ready for Qed: {final_status.get('ready_for_qed', False)}")
-            
-            return success
-            
-        finally:
-            coq_interface.close()
-            
-    except Exception as e:
-        print(f"❌ Test failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+                enable_context_search=False,  # keep this run to one moving part
+            ),
+            max_steps=MAX_STEPS,
+            enable_recording=False,
+            output_dir=str(tmp_path),
+        )
 
-if __name__ == "__main__":
-    print("=" * 70)
-    print("🧪 SIMPLE CONTROLLER PROVE_THEOREM TEST")
-    print("=" * 70)
-    
-    # Check prerequisites
-    if not coq_file.exists():
-        print(f"❌ Coq file not found: {coq_file}")
-        sys.exit(1)
-        
-    if not config_file.exists():
-        print(f"❌ Config file not found: {config_file}")
-        sys.exit(1)
-    
-    # Run the test
-    success = test_prove_theorem()
-    
-    # Final summary
-    print(f"\n{'='*70}")
-    print("🏁 FINAL RESULTS")
-    print(f"{'='*70}")
-    
-    if success:
-        print("🎉 SUCCESS: prove_theorem API worked correctly!")
-        print("✅ Controller orchestrated the proof successfully")
-        print("✅ Theorem proven using controller architecture")
-        print("\n💡 The controller.prove_theorem() API is working correctly!")
-    else:
-        print("❌ FAILURE: prove_theorem API test failed")
-        print("🔧 Check the error messages above for details")
-    
-    print(f"\n🚀 Controller API Status: {'✅ WORKING' if success else '❌ NEEDS FIXING'}")
+        success = controller.prove_theorem(THEOREM)
+
+        # --- the verdict is a real bool and agrees with the controller state
+        assert isinstance(success, bool), type(success)
+        assert success == controller.is_successful
+        assert controller.current_theorem_name == THEOREM
+
+        # --- the step budget was respected
+        assert 0 <= controller.gen_step_count <= MAX_STEPS, controller.gen_step_count
+        assert controller.global_step_id >= controller.gen_step_count
+
+        # --- bookkeeping matches what actually went into the proof
+        applied = [s.text.strip() for s in coq.proof.steps][1:]  # drop "Proof."
+        assert len(controller.successful_tactics) + len(controller.query_commands) >= 0
+        for tactic in controller.successful_tactics:
+            assert tactic.strip() in " ".join(applied), (
+                f"{tactic.strip()!r} is recorded as successful but is not in the script"
+            )
+        assert not set(controller.successful_tactics) & set(controller.failed_tactics), (
+            "a tactic is recorded as both successful and failed"
+        )
+
+        # --- the run artifacts are written either way
+        png = tmp_path / f"{THEOREM}_proof_tree_final.png"
+        tree_json = tmp_path / f"{THEOREM}_proof_tree_final.json"
+        assert png.exists(), sorted(p.name for p in tmp_path.iterdir())
+        assert tree_json.exists(), sorted(p.name for p in tmp_path.iterdir())
+
+        tree = json.loads(tree_json.read_text())
+        assert tree["root"]["tactic"] == "Proof."
+        assert "metadata" in tree
+
+        # --- and the file on disk agrees with the verdict
+        content = Path(coq.file_path).read_text(encoding="utf-8")
+        if success:
+            assert coq.proof.steps[-1].text.strip() == "Qed."
+            assert "Qed." in content
+            assert coq.proof_file.unproven_proofs == []
+        else:
+            assert coq.proof_file.unproven_proofs, (
+                "prove_theorem() reported failure but left no open proof"
+            )
+    finally:
+        coq.close()

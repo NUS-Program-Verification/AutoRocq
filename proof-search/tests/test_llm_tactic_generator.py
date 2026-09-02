@@ -1,27 +1,37 @@
+"""
+ContextManager: what it wires up at construction, and the initial prompt it
+builds for the model.
+
+Each test used to collect its checks into a dict, print a tick or a cross per
+entry, and return the conjunction. pytest ignores that return, so a
+ContextManager with no chat session, no history and no model passed exactly
+like a working one -- as did the `except Exception` paths, which returned False
+after printing a traceback.
+
+These stay behind the `llm` marker. Nothing here calls the API -- ContextManager
+and CoqChatSession only assemble a system prompt at construction -- but the
+marker was added deliberately after a plain `pytest` run was seen billing for
+real, so unmarking it is a decision for whoever owns the key, not this cleanup.
+"""
+
 import os
 import sys
 from pathlib import Path
 
 import pytest
 
-# Add the parent directory to Python path so we can import backend modules
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-import pytest
-
-from backend.coq_interface import CoqInterface
 from agent.context_manager import ContextManager
-from utils.config import ProofAgentConfig
-from utils.coq_utils import find_transitive_dependencies
+from agent.proof_tree import ProofTree
+from backend.coq_interface import CoqInterface
 from tests.test_utils import temp_example_copy
+from utils.config import ProofAgentConfig
 
-# --- CONFIGURATION ---
-coq_file = temp_example_copy("example.v")
 config_file = PROJECT_ROOT / "configs" / "default_config.json"
 
-# conftest.py skips these unless --runllm is passed. Without the marker every
-# plain `pytest` run called the API for real, and billed for it.
+# conftest.py skips these unless --runllm is passed.
 pytestmark = pytest.mark.llm
 
 
@@ -38,185 +48,77 @@ def config():
     return loaded
 
 
-def test_context_manager_initialization(config):
-    """Simple test of the ContextManager initialization."""
-    print("🧪 Testing ContextManager initialization...")
-    
-    if not coq_file.exists():
-        print(f"Error: Example file not found at {coq_file}")
-        return False
-    
-    # Create a CoqInterface instance first
-    coq = CoqInterface(str(coq_file))
-    coq.load()
-    
+@pytest.fixture
+def coq():
+    interface = CoqInterface(str(temp_example_copy("example.v")))
+    assert interface.load(), f"load() failed: {interface.get_last_error()}"
     try:
-        # Instantiate ContextManager with the required coq_interface argument
-        cm = ContextManager(coq, api_key=config.llm.api_key)
-
-        # Check that the ContextManager has the expected attributes
-        checks = {
-            "Has chat_session": hasattr(cm, 'chat_session') and cm.chat_session is not None,
-            "Has tactic_history": hasattr(cm, 'tactic_history') and cm.tactic_history is not None,
-            "Has model": hasattr(cm, 'model') and cm.model is not None,
-            "Has coq interface": hasattr(cm, 'coq') and cm.coq is not None,
-        }
-        
-        all_passed = True
-        for check_name, result in checks.items():
-            status = "✅" if result else "❌"
-            print(f"   {status} {check_name}")
-            if not result:
-                all_passed = False
-        
-        if all_passed:
-            print(f"✅ ContextManager initialized successfully with model: {cm.model}")
-            return True
-        else:
-            print("❌ ContextManager initialization failed some checks")
-            return False
-        
-    except Exception as e:
-        print(f"❌ Error in ContextManager test: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+        yield interface
     finally:
-        # Clean up
-        coq.close()
+        interface.close()
 
-def test_context_manager_with_proof(config):
-    """Test that ContextManager can work with a proof file."""
-    print("\n🧪 Testing ContextManager with proof file...")
-    
-    if not coq_file.exists():
-        print(f"Error: Example file not found at {coq_file}")
-        return False
-    
-    coq = CoqInterface(str(coq_file))
-    coq.load()
-    
-    try:
-        cm = ContextManager(coq, api_key=config.llm.api_key)
 
-        print("== Initial proof state ==")
-        goals = coq.get_goal_str()
-        hypotheses = coq.get_hypothesis()
-        
-        print(f"Goals: {goals[:200] if goals else 'None'}...")
-        print(f"Hypotheses: {hypotheses[:100] if hypotheses else 'None'}...")
-        
-        # Test building initial prompt
-        print("\n🔧 Testing build_initial_prompt...")
-        try:
-            from agent.proof_tree import ProofTree
-            proof_tree = ProofTree()
-            # Add a dummy root node
-            proof_tree.add_node(
-                tactic="Proof.",
-                goals_before=goals or "",
-                goals_after=goals or "",
-                hypotheses_before=hypotheses or "",
-                hypotheses_after=hypotheses or "",
-                step_number=1,
-                subgoals_after=[]
-            )
-            proof_tree_str = proof_tree.get_proof_tree_string()
-            prompt = cm.build_initial_prompt(proof_tree_str)
-            
-            if prompt and len(prompt) > 0:
-                print(f"✅ Initial prompt built successfully ({len(prompt)} chars)")
-                print(f"   Preview: {prompt[:200]}...")
-                return True
-            else:
-                print("❌ Initial prompt is empty")
-                return False
-        except Exception as e:
-            print(f"❌ Error building initial prompt: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
-            
-    except Exception as e:
-        print(f"❌ Test failed with error: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-    finally:
-        coq.close()
+def test_context_manager_wires_up_its_collaborators(config, coq):
+    """Everything the controller reads off a ContextManager has to be there."""
+    cm = ContextManager(coq, api_key=config.llm.api_key)
 
-def test_extract_essential_content(config):
-    """Test that ContextManager can extract essential proof content."""
-    print("\n🧪 Testing extract_essential_proof_content...")
-    
-    if not coq_file.exists():
-        print(f"Error: Example file not found at {coq_file}")
-        return False
-    
-    coq = CoqInterface(str(coq_file))
-    coq.load()
-    
-    try:
-        cm = ContextManager(coq, api_key=config.llm.api_key)
-        
-        # Read the file content
-        with open(coq_file, 'r', encoding='utf-8') as f:
-            content = f.read()
-        
-        print(f"   Original content: {len(content)} chars")
-        
-        # Extract essential content
-        extracted = cm.extract_essential_proof_content(content)
-        
-        print(f"   Extracted content: {len(extracted)} chars")
-        print(f"   Compression ratio: {len(extracted)/len(content):.1%}" if len(content) > 0 else "   N/A")
-        
-        if extracted and len(extracted) > 0:
-            print(f"✅ Content extraction successful")
-            return True
-        else:
-            print("❌ Content extraction returned empty result")
-            return False
-            
-    except Exception as e:
-        print(f"❌ Test failed with error: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-    finally:
-        coq.close()
+    assert cm.coq is coq
+    assert cm.chat_session is not None
+    assert cm.tactic_history is not None
+    assert cm.model, "no model resolved"
+    assert cm.chat_session.model == cm.model or cm.chat_session.model.endswith(cm.model)
+    assert cm.context_search is not None, "context search failed to initialise"
 
-if __name__ == "__main__":
-    print("=" * 60)
-    print("Testing ContextManager")
-    print("=" * 60)
-    
-    # Named cfg, not config, so the script path does not shadow the fixture.
-    cfg = ProofAgentConfig.from_file(str(config_file))
+    # The chat session opens with a system prompt and the tools it advertises.
+    assert cm.chat_session.messages, "the session has no system prompt"
+    assert cm.chat_session.messages[0]["role"] == "system"
+    tool_names = {t["function"]["name"] for t in cm.chat_session.tools}
+    assert {"plan", "tactic"} <= tool_names, tool_names
 
-    # Run initialization test
-    print("\n--- ContextManager Initialization Test ---")
-    init_test_passed = test_context_manager_initialization(cfg)
 
-    # Run proof file test
-    print("\n--- ContextManager Proof File Test ---")
-    proof_test_passed = test_context_manager_with_proof(cfg)
-    
-    # Run content extraction test
-    print("\n--- Content Extraction Test ---")
-    extraction_test_passed = test_extract_essential_content(cfg)
-    
-    # Summary
-    print("\n" + "=" * 60)
-    all_passed = init_test_passed and proof_test_passed and extraction_test_passed
-    
-    if all_passed:
-        print("✅ All ContextManager tests PASSED!")
-        print("The ContextManager is working correctly.")
-        sys.exit(0)
-    else:
-        print("❌ Some ContextManager tests FAILED!")
-        print(f"   - Initialization: {'✅' if init_test_passed else '❌'}")
-        print(f"   - Proof file: {'✅' if proof_test_passed else '❌'}")
-        print(f"   - Content extraction: {'✅' if extraction_test_passed else '❌'}")
-        sys.exit(1)
+def test_disabling_context_search_removes_the_query_tool(config, coq):
+    """The flag has to reach the tool list the model is offered."""
+    with_search = ContextManager(coq, api_key=config.llm.api_key, enable_context_search=True)
+    without = ContextManager(coq, api_key=config.llm.api_key, enable_context_search=False)
+
+    names = lambda cm: {t["function"]["name"] for t in cm.chat_session.tools}
+
+    assert "query" in names(with_search)
+    assert "query" not in names(without), names(without)
+    assert {"plan", "tactic"} <= names(without)
+
+
+def test_the_initial_prompt_carries_the_goal_and_the_plan_slot(config, coq):
+    """build_initial_prompt is what the model sees first; check its content."""
+    cm = ContextManager(coq, api_key=config.llm.api_key)
+
+    goals = coq.get_goal_str()
+    hypotheses = coq.get_hypothesis()
+    proof_tree = ProofTree()
+    proof_tree.add_node(
+        tactic="Proof.",
+        goals_before=goals or "",
+        goals_after=goals or "",
+        hypotheses_before=hypotheses or "",
+        hypotheses_after=hypotheses or "",
+        step_number=1,
+        subgoals_after=[],
+    )
+
+    prompt = cm.build_initial_prompt(proof_tree.get_proof_tree_string())
+
+    assert prompt.strip(), "the initial prompt is empty"
+    assert "## PROOF FILE CONTEXT:" in prompt
+    assert "## CURRENT PROOF PLAN: None" in prompt
+    # The trimmed file context has to reach the prompt, theorem included.
+    assert "orb_true_l" in prompt, prompt[:500]
+    assert "Require" in prompt
+
+
+def test_a_proof_plan_replaces_the_empty_plan_slot(config, coq):
+    cm = ContextManager(coq, api_key=config.llm.api_key, proof_plan="destruct the bool")
+
+    prompt = cm.build_initial_prompt("")
+
+    assert "## CURRENT PROOF PLAN:\ndestruct the bool" in prompt
+    assert "## CURRENT PROOF PLAN: None" not in prompt
