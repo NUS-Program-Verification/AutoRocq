@@ -104,10 +104,13 @@ def test_get_hypothesis_renders_the_focused_context(coq):
     """The context comes off the goals; the proof's steps never carried it.
 
     get_raw_hypothesis() used to read `hypotheses` or `context` off the proof's
-    last coqpyt Step. A Step carries only text/short_text/ast/diagnostics, so
-    neither branch was ever taken and every caller got "" -- the tactic history,
-    the proof tree, and the prompt, which said "Hypotheses: None" for the state
-    the intros above left with eight names in context.
+    last step. A ProofStep has no `hypotheses`, and its `context` is a
+    List[Term] -- the definitions and notations that step referenced, never the
+    proof's hypotheses. So the second branch was taken and returned either ""
+    (empty list, which is what this goal file gives, and what put
+    "Hypotheses: None" in every prompt) or a rendering of whatever terms the
+    step happened to touch, labelled as the context. Hypotheses have only ever
+    been on the goals: goals.goals[i].hyps, which is what get_subgoals() reads.
     """
     focused = coq.get_subgoals()[0]
     assert focused.hyps, "the context is gone; this test is moot"
