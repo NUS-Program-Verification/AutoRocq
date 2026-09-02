@@ -1329,8 +1329,13 @@ class CoqInterface:
                 
                 return True
             
-            except Exception:
-                
+            except Exception as qed_error:
+                # Rocq refused the terminator: unresolved evars, a guard
+                # condition it cannot check. Record why -- this used to be
+                # dropped, leaving "not complete" with no reason anywhere.
+                self.last_error = f"Qed refused: {qed_error}"
+                self.logger.info(f"❌ Qed refused: {qed_error}")
+
                 # Make sure we didn't accidentally add a step due to the failed attempt
                 if len(proof.steps) > original_step_count:
                     try:
