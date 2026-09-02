@@ -81,7 +81,8 @@ def test_prove_theorem():
             context_manager = ContextManager(
                 coq_interface,
                 api_key=config.llm.api_key,
-                enable_history_context=getattr(config, "enable_history_context", True)
+                enable_history_context=getattr(config, "enable_history_context", True),
+                enable_context_search=False,  # disabled for this simple test
             )
             print("✅ ContextManager created")
             
@@ -91,7 +92,6 @@ def test_prove_theorem():
                 coq_interface=coq_interface,
                 context_manager=context_manager,
                 max_steps=15,  # Enough steps for our sequence
-                enable_context_search=False,  # Disable for simple test
             )
             print("✅ Controller created")
             
