@@ -84,9 +84,11 @@ def test_completion_status_only_flips_once_the_goals_are_gone(coq):
 
     final = coq.get_proof_completion_status()
     assert final["ready_for_qed"], final
-    # is_ready_for_qed() applies Qed as soon as it succeeds and keeps it.
-    assert final["qed_already_applied"], final
+    assert not final["qed_already_applied"], "status applied Qed as a side effect"
+
+    assert coq.apply_qed(), "Qed was refused on a finished proof"
     assert coq.get_unproven_proof() is None, "the proof is still open after Qed"
+    assert coq.is_proof_complete(), "completion did not survive Qed"
 
 
 def test_a_rejected_tactic_reports_the_error_and_changes_nothing(coq):

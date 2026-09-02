@@ -95,21 +95,21 @@ def test_tactics_drive_the_proof_to_qed(coq):
     assert "No more goals" in coq.get_goal_str(), coq.get_goal_str()
     assert coq.is_proof_complete(), "no goals left but the proof is not complete"
 
+    # Asking for status reports on the proof; it does not close it.
     status = coq.get_proof_completion_status()
     assert status["ready_for_qed"], status
-    # is_ready_for_qed() applies Qed itself once it succeeds, so by the time the
-    # status is built the proof already carries its terminator.
-    assert status["qed_already_applied"], status
+    assert not status["qed_already_applied"], "status applied Qed as a side effect"
+    assert status == coq.get_proof_completion_status(), "status is not idempotent"
+
+    assert coq.apply_qed(), "Qed was refused on a finished proof"
     assert coq.proof.steps[-1].text.strip() == "Qed."
 
-    # Known defect, recorded rather than fixed here: is_proof_complete() reads
-    # proof_file.unproven_proofs, and applying Qed takes the proof out of that
-    # list. get_unproven_proof() then returns None and completion flips back to
-    # False -- the one moment the proof is definitely finished.
+    # Completion survives Qed, even though coqpyt drops the proof out of
+    # unproven_proofs the moment it closes.
     assert coq.proof_file.unproven_proofs == []
-    assert not coq.is_proof_complete(), (
-        "is_proof_complete() now survives Qed; drop this expectation"
-    )
+    assert coq.is_proof_complete(), "completion flipped back to False after Qed"
+    final = coq.get_proof_completion_status()
+    assert final["is_complete"] and final["qed_already_applied"], final
 
 
 def test_a_bad_tactic_fails_without_breaking_the_session(coq):
