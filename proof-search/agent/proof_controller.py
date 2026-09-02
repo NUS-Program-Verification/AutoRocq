@@ -29,6 +29,7 @@ class ProofController:
         max_context_search: int = 3,
         history_file: str = "tactic_history.json",
         recording_output_dir: str = "data/statistics",
+        output_dir: Optional[str] = None,
         interactive: Optional[InteractiveConfig] = None
     ):
         
@@ -45,6 +46,11 @@ class ProofController:
         self.coq = coq_interface
         self.context_manager = context_manager
         self.coq_chat_session = context_manager.chat_session
+
+        # The run's output directory: where the proof tree is saved, beside the
+        # log and the resulting .v. None when the caller has no run directory,
+        # in which case the tree falls back to the proof file's own directory.
+        self.output_dir = output_dir
         
         self.is_successful = False
         self.give_up = False
@@ -263,7 +269,8 @@ class ProofController:
         Finalize a proof attempt: record history, save tree, end recording.
         Called by prove_theorem() and InteractiveSessionManager.
         """
-        proof_file_dir = str(Path(self.coq.file_path).parent)
+        tree_dir = Path(self.output_dir) if self.output_dir else Path(self.coq.file_path).parent
+        tree_dir.mkdir(parents=True, exist_ok=True)
         prefix = self.current_theorem_name + "_"
 
         completion_message = (
@@ -277,8 +284,8 @@ class ProofController:
             self.logger.info(f"🔍 Recording successful proof with {len(tactics_with_states)} tactics")
             self._record_successful_proof(tactics_with_states)
 
-        self.proof_tree.save_to_png(str(Path(proof_file_dir) / "proof_tree_final"), prefix=prefix)
-        self.proof_tree.save_to_json(str(Path(proof_file_dir) / "proof_tree_final.json"), prefix=prefix)
+        self.proof_tree.save_to_png(str(tree_dir / "proof_tree_final"), prefix=prefix)
+        self.proof_tree.save_to_json(str(tree_dir / "proof_tree_final.json"), prefix=prefix)
 
         if self.enable_recording and self.recorder:
             try:
