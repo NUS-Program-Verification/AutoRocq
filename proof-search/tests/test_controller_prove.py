@@ -92,6 +92,7 @@ def test_prove_theorem():
                 coq_interface=coq_interface,
                 context_manager=context_manager,
                 max_steps=15,  # Enough steps for our sequence
+                output_dir=str(coq_file.parent),
             )
             print("✅ Controller created")
             

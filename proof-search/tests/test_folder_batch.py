@@ -121,6 +121,7 @@ def prove_single_file(
                     max_steps=100,  # Reasonable limit for testing
                     enable_error_feedback=getattr(config, "enable_error_feedback", True),
                     max_context_search=getattr(config, "max_context_search", 3),
+                    output_dir=str(results_dir) if results_dir else None,
                 )
                 
                 # Check proof status
