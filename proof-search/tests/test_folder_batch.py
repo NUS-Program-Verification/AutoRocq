@@ -2,6 +2,7 @@
 import os
 import sys
 from pathlib import Path
+from datetime import datetime
 import time
 from typing import List, Dict, Any
 
@@ -68,18 +69,26 @@ def read_v_files_from_lemmas(lemmas_path: str, benchmark_folder: str) -> List[st
                 print(f"❌ File not found: {full_path}")
     return v_files
 
-def prove_single_file(coq_file: Path, config: ProofAgentConfig) -> bool:
-    """Prove a single file with crash recovery."""
+def prove_single_file(
+    coq_file: Path,
+    config: ProofAgentConfig,
+    results_dir: Path = None,
+    result_name: str = None,
+) -> bool:
+    """Prove a single file with crash recovery.
+
+    The benchmark files are tracked sources: cleaning strips their proofs and
+    coqpyt writes each accepted tactic back to disk, so a run would rewrite the
+    whole of AutoRocq-bench. Every attempt therefore happens on a scratch copy,
+    and the result is saved into results_dir where it can be re-checked later.
+    """
     max_crash_retries = 3
     crash_count = 0
     
     while crash_count < max_crash_retries:
+        coq_interface = None
         try:
-            # Clean the proof file first
-            if not clean_proof_file(coq_file):
-                return False
-            
-            # Initialize CoqInterface
+            # CoqInterface proves on a copy, so the benchmark file is never touched.
             coq_interface = CoqInterface(
                 file_path=str(coq_file),
                 workspace=config.coq.workspace or str(Path(coq_file).parent),
@@ -90,6 +99,9 @@ def prove_single_file(coq_file: Path, config: ProofAgentConfig) -> bool:
             )
             
             try:
+                if not clean_proof_file(coq_interface.file_path):
+                    return False
+
                 # Load the cleaned file
                 if not coq_interface.load():
                     return False
@@ -142,6 +154,10 @@ def prove_single_file(coq_file: Path, config: ProofAgentConfig) -> bool:
             else:
                 # Re-raise non-crash errors
                 raise e
+        
+        finally:
+            if coq_interface is not None and results_dir is not None:
+                coq_interface.save_result(results_dir, result_name)
     
     return False
 
@@ -170,6 +186,12 @@ def test_folder_batch():
         proved_count = 0
         failed_count = 0
         
+        # Each attempt is saved here so it can be re-verified independently
+        # later, instead of being overwritten by the next run.
+        results_dir = PROJECT_ROOT / "results" / f"batch-{datetime.now():%Y%m%d-%H%M%S}"
+        results_dir.mkdir(parents=True, exist_ok=True)
+        print(f"💾 Saving proofs to: {results_dir}")
+        
         print(f"📁 Found {total_files} .v files listed in {lemmas_txt}")
         print(f"🚀 Starting batch proof testing...")
         print()
@@ -180,7 +202,9 @@ def test_folder_batch():
             # --- Add this line to clearly show which file is being proved ---
             print(f"\n=== Proving file [{i}/{total_files}]: {rel_path} | Proved: {proved_count} | Failed: {failed_count} | Remaining: {total_files - i} ===")
             start_time = time.time()
-            success = prove_single_file(coq_file, config)
+            success = prove_single_file(
+                coq_file, config, results_dir, rel_path.replace(os.sep, "__")
+            )
             elapsed = time.time() - start_time
 
             # Update counters
