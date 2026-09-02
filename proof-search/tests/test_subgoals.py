@@ -100,23 +100,44 @@ def test_intros_moves_every_binder_into_the_hypotheses(coq):
     assert ty_after != str(subgoals_before[0].ty)
 
 
-def test_get_hypothesis_never_returns_anything(coq):
-    """Known defect, recorded rather than fixed here.
+def test_get_hypothesis_renders_the_focused_context(coq):
+    """The context comes off the goals; the proof's steps never carried it.
 
-    get_raw_hypothesis() reads `hypotheses` or `context` off the proof's last
-    coqpyt Step. Step carries only text/short_text/ast/diagnostics, so neither
-    branch is ever taken and the function falls through to "". It returns the
-    empty string in every proof state, including the one left by the intros
-    above, which has eight names in context.
-
-    Everything the agent stores as hypotheses_before/hypotheses_after -- in the
-    tactic history, in the proof tree, and in the prompt it sends the model --
-    is therefore this empty string. get_subgoals()[i].hyps is the only place
-    the real context is available.
+    get_raw_hypothesis() used to read `hypotheses` or `context` off the proof's
+    last coqpyt Step. A Step carries only text/short_text/ast/diagnostics, so
+    neither branch was ever taken and every caller got "" -- the tactic history,
+    the proof tree, and the prompt, which said "Hypotheses: None" for the state
+    the intros above left with eight names in context.
     """
-    assert coq.get_subgoals()[0].hyps, "the context is gone; this test is moot"
-    assert coq.get_hypothesis() == "", (
-        "get_hypothesis() now returns the context; drop this expectation "
-        "and assert on the real value"
+    focused = coq.get_subgoals()[0]
+    assert focused.hyps, "the context is gone; this test is moot"
+
+    hypotheses = coq.get_hypothesis()
+    assert hypotheses, "get_hypothesis() is still empty"
+    assert hypotheses == coq.get_raw_hypothesis(), "nothing here needs ANSI cleaning"
+
+    lines = hypotheses.splitlines()
+    assert len(lines) == len(focused.hyps), (
+        f"{len(lines)} lines rendered for {len(focused.hyps)} hypotheses"
     )
-    assert coq.get_raw_hypothesis() == ""
+
+    # Every name and every type the goal carries has to be in there, in order.
+    for hyp, line in zip(focused.hyps, lines):
+        for name in hyp.names:
+            assert name in line, f"{name!r} missing from {line!r}"
+        assert str(hyp.ty) in line, f"{hyp.ty!r} missing from {line!r}"
+
+    names = [name for hyp in focused.hyps for name in hyp.names]
+    assert len(names) == 8, names
+    for name in names:
+        assert name in hypotheses, f"{name!r} never reached the rendered context"
+
+
+def test_the_context_is_not_the_goal(coq):
+    """The two halves of the state the agent prompts with must stay distinct."""
+    hypotheses = coq.get_hypothesis()
+    conclusion = str(coq.get_subgoals()[0].ty)
+
+    assert conclusion not in hypotheses, "the conclusion leaked into the context"
+    assert "i1 * i1 <= 99" in conclusion, conclusion
+    assert "i1 * i1 <= 99" not in hypotheses, hypotheses

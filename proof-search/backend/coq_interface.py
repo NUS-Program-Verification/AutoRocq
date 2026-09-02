@@ -275,6 +275,26 @@ class CoqInterface:
         self.__goal_cache_filled = True
         return current_goals
     
+    def has_open_goals(self) -> bool:
+        """Whether any goal is still open.
+
+        `current_goals` is a GoalAnswer, and a GoalAnswer stays truthy after the
+        last goal closes -- `if not current_goals` can only fire when the lookup
+        itself failed, never when the proof is finished, and str() of it is the
+        sentence "No more goals.". The count has to come off the structure:
+        current_goals.goals is a GoalConfig, whose .goals are the focused goals
+        and whose .stack holds the backgrounded ones.
+        """
+        goal_answer = self._get_current_goals_cached()
+        if goal_answer is None:
+            return False
+
+        goal_config = getattr(goal_answer, 'goals', None)
+        if goal_config is None:
+            return False
+
+        return bool(getattr(goal_config, 'goals', None) or getattr(goal_config, 'stack', None))
+
     def get_raw_goal_str(self):
         """Return the string representation of the current goal."""
         try:
@@ -341,40 +361,35 @@ class CoqInterface:
             self.logger.error(f"Error getting goal string: {e}")
             return f"(error retrieving goals: {str(e)})"
     
+    @staticmethod
+    def format_hypotheses(goal) -> str:
+        """One "names : type" line per hypothesis of a coqpyt Goal."""
+        lines = []
+        for hyp in getattr(goal, 'hyps', None) or []:
+            names = ', '.join(getattr(hyp, 'names', None) or [])
+            ty = getattr(hyp, 'ty', '')
+            lines.append(f"{names} : {ty}" if names else str(ty))
+        return '\n'.join(lines)
+
     def get_raw_hypothesis(self):
-        """Return the current hypotheses/context for the active proof state."""
+        """Return the context of the focused goal, one hypothesis per line.
+
+        The context lives on the goals, not on the proof's steps. This used to
+        read `hypotheses` or `context` off proof.steps[-1], but a coqpyt Step
+        carries only text/short_text/ast/diagnostics, so neither branch was ever
+        taken and every caller got "" -- including the prompt, which said
+        "Hypotheses: None" for a proof state with a full context.
+
+        Backgrounded goals are left out: this is the state the next tactic acts
+        on. get_subgoals() is there for the rest.
+        """
         try:
-            proof = self.get_unproven_proof()
-            if not proof or not proof.steps:
+            subgoals = self.get_subgoals()
+            if not subgoals:
                 return ""
-            
-            # Get the last step's context/hypotheses
-            last_step = proof.steps[-1]
-            
-            # Try different ways to get hypotheses
-            if hasattr(last_step, 'hypotheses'):
-                hyp = last_step.hypotheses
-            elif hasattr(last_step, 'context'):
-                hyp = last_step.context
-            else:
-                return ""
-            
-            if not hyp:
-                return ""
-            
-            # Handle different hypothesis formats
-            if isinstance(hyp, dict):
-                if not hyp:
-                    return ""
-                hyp_lines = []
-                for name, value in hyp.items():
-                    hyp_lines.append(f"{name} : {value}")
-                return "\n".join(hyp_lines)
-            elif isinstance(hyp, list):
-                return "\n".join(str(h) for h in hyp)
-            else:
-                return str(hyp)
-                
+
+            return self.format_hypotheses(subgoals[0])
+
         except Exception as e:
             self.logger.error(f"Error getting hypotheses: {e}")
             return f"(error retrieving hypotheses: {str(e)})"
@@ -628,7 +643,15 @@ class CoqInterface:
         return proof.steps[-1].text.strip().lower() in self.TERMINATORS
 
     def _no_goals_left(self, goals: Optional[str]) -> bool:
-        """Whether a goal string says there is nothing left to prove."""
+        """Whether there is nothing left to prove.
+
+        The goal structure answers this exactly when it is available; the string
+        checks below are the fallback for when it is not (no proof file, or a
+        lookup that failed).
+        """
+        if self.proof_file is not None and self._get_current_goals_cached() is not None:
+            return not self.has_open_goals()
+
         if not goals or goals.strip() in ["", "(no current goal)", "no more goals", "proof completed"]:
             return True
         goals_lower = goals.lower().strip()
@@ -1478,8 +1501,11 @@ class CoqInterface:
             
             # Get CURRENT goals directly from proof_file (not from cached step.goals)
             current_goals = self._get_current_goals_cached()
-            
-            if not current_goals:
+
+            # `is None` on purpose: a GoalAnswer with no goals left is still
+            # truthy, so `if not current_goals` would never fire here. Whether
+            # any goal remains is has_open_goals()'s question.
+            if current_goals is None:
                 self.logger.debug("No current goals available")
                 return []
             

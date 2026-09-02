@@ -168,6 +168,33 @@ def test_the_flags_do_not_depend_on_the_order_they_are_computed(coq):
     ), status
 
 
+
+def test_open_goals_are_counted_not_inferred_from_the_sentence(coq):
+    """`current_goals` is a GoalAnswer, and it stays truthy with nothing left.
+
+    `if not current_goals:` could therefore only ever fire on a failed lookup,
+    never on a finished proof, and str() of the thing is the sentence
+    "No more goals.". has_open_goals() counts current_goals.goals.goals instead.
+    """
+    assert coq.has_open_goals(), "the proof opens with a goal"
+    assert len(coq.get_subgoals()) == 1
+
+    for tactic in PROOF_TACTICS[:2]:  # intros b. destruct b.
+        assert coq.apply_tactic(tactic), coq.get_last_error()
+    assert len(coq.get_subgoals()) == 2, "destruct did not branch the proof"
+    assert coq.has_open_goals(), "two goals open and it says otherwise"
+
+    for tactic in PROOF_TACTICS[2:]:
+        assert coq.apply_tactic(tactic), coq.get_last_error()
+
+    answer = coq._get_current_goals_cached()
+    assert answer, "a GoalAnswer with no goals left is still truthy -- the trap"
+    assert "No more goals" in str(answer), str(answer)
+
+    assert not coq.has_open_goals(), "has_open_goals() fell for the truthiness"
+    assert coq.get_subgoals() == []
+    assert coq.is_ready_for_qed(), "readiness follows the goal count"
+
 def test_a_refused_qed_leaves_the_proof_alone_and_says_why(coq, monkeypatch):
     """Rocq can reject Qed on a goal-free proof: evars, a guard condition.
 

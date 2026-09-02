@@ -65,7 +65,7 @@ class ProofController:
 
         # Initialize counters and history
         self.global_step_id = 0         # Global ID for tool call / proof step
-        self.gen_step_count = 0         # Global step count for tactic / HL / rollback
+        self.step_count = 0         # Steps spent: tactic / HL / rollback
         self.successful_tactics = []    # Global successful tactics
         self.failed_tactics = []        # Global failed tactics
         self.query_commands = []        # Global query commands
@@ -243,7 +243,7 @@ class ProofController:
         self.is_successful = False
         self.give_up = False
         self.global_step_id = 0
-        self.gen_step_count = 0
+        self.step_count = 0
         self.successful_tactics = []
         self.failed_tactics = []
         self.query_commands = []
@@ -275,7 +275,7 @@ class ProofController:
 
         completion_message = (
             "Proof completed" if self.is_successful
-            else "Max steps reached" if self.gen_step_count >= self.max_steps
+            else "Max steps reached" if self.step_count >= self.max_steps
             else "Proof aborted" if self.give_up
             else "Unable to proceed"
         )
@@ -297,7 +297,7 @@ class ProofController:
                         'failed_tactics': len(self.failed_tactics),
                         'query_commands': len(self.query_commands),
                         'steps_taken': self.global_step_id,
-                        'steps_to_completion': self.gen_step_count if self.is_successful else None,
+                        'steps_to_completion': self.step_count if self.is_successful else None,
                         'successful_tactics_list': self.successful_tactics,
                         'query_commands_list': self.query_commands,
                     }
@@ -361,10 +361,10 @@ class ProofController:
         proof_tree_str = self.proof_tree.get_proof_tree_string()
         prompt = self.context_manager.build_initial_prompt(proof_tree_str)
 
-        while self.gen_step_count < self.max_steps:
+        while self.step_count < self.max_steps:
             if self.global_step_id > self.max_steps * (self.max_context_search + 1):
-                self.gen_step_count = self.max_steps  # so that proof completion message is "Max steps reached"
-                self.logger.info(f"\n{'='*60}\n📊 [PROOF STEP {self.global_step_id}] {self.gen_step_count}/{self.max_steps}. Exiting...")
+                self.step_count = self.max_steps  # so that proof completion message is "Max steps reached"
+                self.logger.info(f"\n{'='*60}\n📊 [PROOF STEP {self.global_step_id}] {self.step_count}/{self.max_steps}. Exiting...")
                 break
 
             # Inject pending user hints
@@ -375,7 +375,7 @@ class ProofController:
 
             self.steps_since_restart += 1
             self.global_step_id += 1
-            self.logger.info(f"\n{'='*60}\n📊 [PROOF STEP {self.global_step_id}] {self.gen_step_count}/{self.max_steps}\n{'='*60}")
+            self.logger.info(f"\n{'='*60}\n📊 [PROOF STEP {self.global_step_id}] {self.step_count}/{self.max_steps}\n{'='*60}")
 
             proof_state = self._build_proof_state()
 
@@ -439,7 +439,7 @@ class ProofController:
                 rollback_data = decision_content
                 rollback_reason = rollback_data.get('reason', 'No reason provided')
                 rollback_steps = rollback_data.get('steps', 1)
-                self.gen_step_count += 1
+                self.step_count += 1
                 self.logger.info(f"🔄 Step {self.global_step_id}: ROLLBACK {rollback_steps} step{'s' if rollback_steps != 1 else ''}: {rollback_reason}")
 
                 agent_only = [t for t in self._tactics_with_states if t.get('source') != 'user']
@@ -475,7 +475,7 @@ class ProofController:
                 continue
 
             elif decision_type == 'tactic':
-                self.gen_step_count += 1
+                self.step_count += 1
                 tactic_content = self.context_manager.get_tactic(decision_content, tool_call_id)
 
                 if tactic_content.startswith(("Search", "Print", "Check", "About")):
@@ -483,7 +483,7 @@ class ProofController:
                     prompt += self.context_manager.handle_query_call(decision_content, tool_call_id)
                     self.logger.info(f"⚠️  Step {self.global_step_id}: QUERY AS TACTIC!")
                     self.query_commands.append(decision_content)
-                    self.gen_step_count -= 1
+                    self.step_count -= 1
                     consecutive_queries += 1
                     consecutive_errors += 1
                     continue
