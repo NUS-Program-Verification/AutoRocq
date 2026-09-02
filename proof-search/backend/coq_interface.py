@@ -1272,8 +1272,10 @@ class CoqInterface:
                     f.writelines(lines)
                     
             return modified
-            
-        except Exception:
+
+        except Exception as e:
+            self.last_error = f"Error ensuring Admitted: {e}"
+            self.logger.error(self.last_error)
             return False
 
     def get_proof_status(self) -> Dict[str, Any]:
@@ -1288,6 +1290,7 @@ class CoqInterface:
                 "last_error": self.last_error
             }
         except Exception as e:
+            self.logger.error(f"Error getting proof status: {e}")
             return {
                 "has_proof": False,
                 "proof_steps": 0,

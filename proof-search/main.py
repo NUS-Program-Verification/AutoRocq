@@ -421,8 +421,8 @@ def cleanup_components(components: Dict[str, Any], logger):
                     with timeout_context(1):
                         component.reset()
                         logger.debug(f"Reset component: {name}")
-                except:
-                    logger.warning(f"Failed to reset {name}")
+                except Exception as reset_error:
+                    logger.warning(f"Failed to reset {name}: {reset_error}")
                 
     except Exception as e:
         logger.error(f"Critical error during cleanup: {e}")

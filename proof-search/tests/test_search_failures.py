@@ -17,7 +17,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from agent.context_search import CoqCommandSearch
+from agent.context_manager import ContextManager
+from agent.context_search import CoqCommandSearch, SearchResult
 from backend.coq_interface import CoqInterface
 from utils.logger import setup_logger
 
@@ -168,6 +169,104 @@ def test_successful_query_is_unaffected():
     print("  ✅ success -> content passed through; genuine empty -> 'No results found.'")
 
 
+class FakeSearch:
+    """The ContextSearch surface _execute_context_search touches."""
+
+    def __init__(self, result):
+        self.result = result
+        self.goal_contexts = []
+
+    def search(self, query, goal_context=""):
+        self.goal_contexts.append(goal_context)
+        return self.result
+
+
+class StubManager:
+    """Just enough ContextManager to call the method unbound."""
+
+    GOAL = "0 <= Z.abs x"
+
+    def __init__(self, result):
+        self.context_search = FakeSearch(result)
+        self.coq = self
+        self.logger = setup_logger("StubManager")
+
+    def get_goal_str(self):
+        return self.GOAL
+
+
+FAILED = SearchResult(
+    content="Query failed: lsp endpoint died",
+    source='coq_command',
+    metadata={'query': 'Search Z.abs.', 'type': 'direct_search', 'error': 'lsp endpoint died'},
+)
+EMPTY = SearchResult(
+    content="No results found.",
+    source='coq_command',
+    metadata={'query': 'Search nope.', 'type': 'direct_search'},
+    result_size=len("No results found."),
+)
+HIT = SearchResult(
+    content="Z.abs_nonneg: forall n : Z, 0 <= Z.abs n",
+    source='coq_command',
+    metadata={'query': 'Search Z.abs.', 'type': 'direct_search'},
+    result_size=40,
+)
+
+
+def run_query(result, query="Search Z.abs."):
+    stub = StubManager(result)
+    text, success = ContextManager._execute_context_search(stub, query)
+    return stub, text, success
+
+
+def test_every_path_out_of_execute_context_search_returns_a_pair():
+    """The caller unpacks two values; one branch used to return a bare string.
+
+    `search_result, success = self._execute_context_search(...)` against a
+    string raises "too many values to unpack", so the one path meant to report
+    an error was the one path that could not.
+    """
+    for label, result in [("failed", FAILED), ("empty", EMPTY), ("hit", HIT)]:
+        value = ContextManager._execute_context_search(StubManager(result), "Search Z.abs.")
+        assert isinstance(value, tuple) and len(value) == 2, f"{label}: {value!r}"
+        text, success = value
+        assert isinstance(text, str) and isinstance(success, bool), f"{label}: {value!r}"
+
+    stub = StubManager(HIT)
+    stub.context_search = None
+    text, success = ContextManager._execute_context_search(stub, "Search Z.abs.")
+    assert success is False and "not available" in text
+    print("  ✅ all four paths return (str, bool)")
+
+
+def test_a_failed_query_reaches_the_model_as_a_failure():
+    """It used to be flattened into "No results found." -- the opposite claim."""
+    _, text, success = run_query(FAILED)
+
+    assert success is False
+    assert "lsp endpoint died" in text, text
+    assert "No results found" not in text, text
+    print(f"  ✅ failure handed over as {text!r}")
+
+
+def test_an_empty_result_is_reported_empty_and_a_hit_is_handed_over_whole():
+    _, empty_text, empty_ok = run_query(EMPTY)
+    assert (empty_text, empty_ok) == ("No results found.", False)
+
+    _, hit_text, hit_ok = run_query(HIT)
+    assert hit_ok is True
+    assert hit_text == HIT.content, hit_text
+    print("  ✅ empty -> (No results found., False); hit -> (content, True)")
+
+
+def test_the_goal_is_passed_to_the_search_so_ranking_has_something_to_score():
+    """Without it, a summarized result is whatever order Rocq printed."""
+    stub, _, _ = run_query(HIT)
+    assert stub.context_search.goal_contexts == [StubManager.GOAL]
+    print("  ✅ goal context forwarded to search()")
+
+
 TESTS = [
     test_extraction_failure_returns_none_and_records_why,
     test_genuinely_empty_search_is_not_a_failure,
@@ -176,6 +275,10 @@ TESTS = [
     test_print_branch_failure_returns_none,
     test_failed_query_never_reaches_the_llm_as_a_good_result,
     test_successful_query_is_unaffected,
+    test_every_path_out_of_execute_context_search_returns_a_pair,
+    test_a_failed_query_reaches_the_model_as_a_failure,
+    test_an_empty_result_is_reported_empty_and_a_hit_is_handed_over_whole,
+    test_the_goal_is_passed_to_the_search_so_ranking_has_something_to_score,
 ]
 
 

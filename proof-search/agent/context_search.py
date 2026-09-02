@@ -118,9 +118,12 @@ class ResultReducer:
         # Show top entries with their signatures
         for i, entry in enumerate(ranked_entries[:self.max_entries]):
             
-            # Update result hit count for this entry
-            result_hash = hash(frozenset(entry.items()))
-            self.result_hit_count[result_hash] = self.result_hit_count.get(result_hash, 0) + 1
+            # Count what we hand back, under the key _rank_entries reads.
+            # This used to hash the whole entry dict while the ranker looked the
+            # count up by md5 of the name, so the two never met and the decay
+            # below was dead: the same entries came back every search.
+            seen = entry.get('name', '').lower()
+            self.result_hit_count[seen] = self.result_hit_count.get(seen, 0) + 1
             
             name = entry.get('name', 'Unknown')
             signature = entry.get('signature', '')
@@ -235,14 +238,14 @@ class ResultReducer:
             if len(name) < 10:
                 score += 1
             
-            # Prefer standard library entries
-            if module in ['Z', 'Nat', 'List', 'Bool', 'Arith']:
+            # Prefer standard library entries. module is lowercased above, so
+            # these are too; against ['Z', 'Nat', ...] this could never match.
+            if module in ['z', 'nat', 'list', 'bool', 'arith']:
                 score += 1
             
-            # Apply hit count penalty (compute hash from entry name)
-            import hashlib
-            result_hash = hashlib.md5(name.encode()).hexdigest()
-            hit_count = self.result_hit_count.get(result_hash, 0)
+            # Push down what earlier summaries already handed back. `name` is
+            # lowercased above, which is the key _structured_summarization counts under.
+            hit_count = self.result_hit_count.get(name, 0)
             if hit_count > 0:
                 # exponential decay of frequently retrieved results
                 score -= 2 ** (hit_count - 1)
@@ -512,6 +515,7 @@ class CoqCommandSearch:
                 )
         except Exception as e:
             error_msg = f"Error executing {query_type}: {str(e)}"
+            self.logger.error(error_msg)
             return SearchResult(
                 content=error_msg,
                 source='coq_command',
