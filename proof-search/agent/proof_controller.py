@@ -562,8 +562,11 @@ class ProofController:
                 post_tactic_status = self.coq.get_proof_completion_status()
                 if post_tactic_status['ready_for_qed'] and not post_tactic_status['qed_already_applied']:
                     # Asking for status no longer closes the proof; do it here.
-                    self.coq.apply_qed()
-                    post_tactic_status = self.coq.get_proof_completion_status()
+                    # Rocq can still refuse Qed on a goal-free proof (unresolved
+                    # evars, guard condition), and then nothing was kept and the
+                    # status we already have still describes the proof.
+                    if self.coq.apply_qed():
+                        post_tactic_status = self.coq.get_proof_completion_status()
                 proof_complete = post_tactic_status['is_complete'] and post_tactic_status['qed_already_applied']
 
                 self.logger.info(f"✅ Step {self.global_step_id}: TACTIC APPLIED SUCCESSFULLY!")

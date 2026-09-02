@@ -112,6 +112,36 @@ def test_tactics_drive_the_proof_to_qed(coq):
     assert final["is_complete"] and final["qed_already_applied"], final
 
 
+
+def test_a_refused_qed_leaves_the_proof_alone(coq, monkeypatch):
+    """Rocq can reject Qed on a proof with no goals left.
+
+    Unresolved evars or a failed guard condition do it. is_ready_for_qed() only
+    predicts -- apply_qed() is the one that finds out, and when it is refused it
+    has to leave the proof exactly as it was and say so.
+    """
+    for tactic in PROOF_TACTICS:
+        assert coq.apply_tactic(tactic), coq.get_last_error()
+
+    assert coq.is_ready_for_qed(), "the goals are gone, Qed is worth trying"
+
+    def refuse(*_args, **_kwargs):
+        raise RuntimeError("Attempt to save an incomplete proof")
+
+    monkeypatch.setattr(coq.proof_file, "append_step", refuse)
+    steps_before = [step.text for step in coq.proof.steps]
+
+    assert coq.apply_qed() is False, "a refused Qed reported success"
+    assert [step.text for step in coq.proof.steps] == steps_before, (
+        "a refused Qed left something behind"
+    )
+
+    status = coq.get_proof_completion_status()
+    assert not status["qed_already_applied"], status
+    assert not (status["is_complete"] and status["qed_already_applied"]), (
+        "an unsaved proof would be reported as a finished one"
+    )
+
 def test_a_bad_tactic_fails_without_breaking_the_session(coq):
     """A rejected tactic must report why and leave the proof where it was."""
     steps_before = coq.get_current_step_number()

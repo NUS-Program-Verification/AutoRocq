@@ -610,13 +610,16 @@ class CoqInterface:
     TERMINATORS = ['qed.', 'qed', 'defined.', 'defined']
 
     def _current_proof(self):
-        """The proof being worked on: the open one, or the one just closed.
+        """The proof this interface is driving.
 
-        get_unproven_proof() goes None the moment Qed lands, because coqpyt
-        takes the proof out of unproven_proofs. Falling back to self.proof is
-        what lets completion stay True once the proof is actually finished.
+        self.proof comes first because that is the object apply_tactic and
+        apply_qed append to: it stays right after Qed lands, when coqpyt has
+        taken the proof out of unproven_proofs and get_unproven_proof() would
+        answer None (single-proof file) or, worse, hand back some other
+        unfinished proof in the same file. load() and restart_coq_server() set
+        it; close() clears it, and the lookup is the fallback for that.
         """
-        return self.get_unproven_proof() or getattr(self, 'proof', None)
+        return getattr(self, 'proof', None) or self.get_unproven_proof()
 
     def _last_step_is_terminator(self, proof) -> bool:
         """Whether the proof already carries its Qed/Defined."""
@@ -1318,7 +1321,7 @@ class CoqInterface:
             try:
                 # Try to apply Qed
                 formatted_qed = "\n  Qed."
-                self.proof_file.append_step(self.proof, formatted_qed)
+                self.proof_file.append_step(proof, formatted_qed)
                 
                 # If we get here, Qed was successfully applied
                 self.logger.info("✅ Qed applied successfully - proof is complete! Keeping Qed in file.")
@@ -1331,7 +1334,7 @@ class CoqInterface:
                 # Make sure we didn't accidentally add a step due to the failed attempt
                 if len(proof.steps) > original_step_count:
                     try:
-                        self.proof_file.pop_step(self.proof)
+                        self.proof_file.pop_step(proof)
                         self.logger.debug("Cleaned up failed Qed attempt")
                     except Exception as cleanup_error:
                         self.logger.warning(f"Error cleaning up failed Qed: {cleanup_error}")
