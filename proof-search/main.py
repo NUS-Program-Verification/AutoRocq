@@ -157,13 +157,13 @@ def validate_arguments(args, config: ProofAgentConfig) -> bool:
     return True
 
 
-def setup_output_directory(output_dir: Optional[str]) -> Path:
+def setup_output_directory(output_dir: Optional[str], proof_file: Optional[str] = None) -> Path:
     """Setup output directory for logs, visualizations, etc."""
     if output_dir:
         output_path = Path(output_dir)
     else:
         # Default: create output directory next to proof file
-        proof_file_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".")
+        proof_file_path = Path(proof_file) if proof_file else Path(".")
         output_path = proof_file_path.parent / f"autorocq-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     
     output_path.mkdir(parents=True, exist_ok=True)
@@ -617,7 +617,7 @@ def main():
         sys.exit(1)
     
     # Setup output directory
-    output_dir = setup_output_directory(args.output_dir or config.output_dir)
+    output_dir = setup_output_directory(args.output_dir or config.output_dir, args.proof_file)
 
     # Record the resolved directory so components write their artifacts there.
     config.output_dir = str(output_dir)

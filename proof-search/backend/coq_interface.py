@@ -45,15 +45,16 @@ class CoqInterface:
         self.source_path = os.path.abspath(file_path)
         self.logger = setup_logger("CoqInterface")
 
-        self._scratch = ScratchProof(file_path, self.logger)
+        if workspace is not None and not os.path.isabs(workspace):
+            workspace = os.path.abspath(workspace)
+        self.workspace = workspace
+
+        self._scratch = ScratchProof(file_path, self.logger, workspace=self.workspace)
         self.file_path = str(self._scratch.open())
         # Not in close(): load() calls close() to tear down the previous coq-lsp
         # session and would delete the file out from under itself.
         # ScratchProof.close() only unlinks files, so it is safe at exit.
         atexit.register(self._scratch.close)
-        if workspace is not None and not os.path.isabs(workspace):
-            workspace = os.path.abspath(workspace)
-        self.workspace = workspace
         
         # Library support attributes
         self.library_paths = library_paths or []
@@ -293,7 +294,14 @@ class CoqInterface:
         if goal_config is None:
             return False
 
-        return bool(getattr(goal_config, 'goals', None) or getattr(goal_config, 'stack', None))
+        stack = getattr(goal_config, 'stack', None) or []
+        stacked_goals = any(before or after for before, after in stack)
+        return bool(
+            getattr(goal_config, 'goals', None)
+            or stacked_goals
+            or getattr(goal_config, 'shelf', None)
+            or getattr(goal_config, 'given_up', None)
+        )
 
     def get_raw_goal_str(self):
         """Return the string representation of the current goal."""
@@ -697,10 +705,6 @@ class CoqInterface:
             if goals and "proof finished" in goals.lower():
                 self.logger.debug("Found 'Proof finished' indicator")
                 return True
-            
-            if goals and "no more goals, but there are some goals you gave up" in goals.lower():
-                self.logger.debug("Found incomplete proof with given up goals")
-                return False
             
             if self._no_goals_left(goals):
                 self.logger.debug("No goals remaining - proof complete")

@@ -35,14 +35,15 @@ def _module_safe(stem: str) -> str:
 class ScratchProof:
     """A disposable copy of a .v file, for one proof attempt."""
 
-    def __init__(self, source: Union[str, Path], logger=None):
+    def __init__(self, source: Union[str, Path], logger=None, workspace: Optional[Union[str, Path]] = None):
         self.source = Path(source).resolve()
         self.logger = logger
         self.path = self.source.with_name(
             f"{_module_safe(self.source.stem)}_autorocq_{uuid.uuid4().hex[:12]}.v"
         )
-        self._coqproject = self.source.parent / "_CoqProject"
+        self._coqproject = Path(workspace).resolve() / "_CoqProject" if workspace else self.source.parent / "_CoqProject"
         self._coqproject_backup: Optional[bytes] = None
+        self._coqproject_existed = False
 
     def open(self) -> Path:
         """Create the scratch copy and return its path."""
@@ -50,7 +51,8 @@ class ScratchProof:
 
         # CoqInterface regenerates _CoqProject from config on load, which would
         # otherwise leave the source tree modified too.
-        if self._coqproject.exists():
+        self._coqproject_existed = self._coqproject.exists()
+        if self._coqproject_existed:
             self._coqproject_backup = self._coqproject.read_bytes()
 
         self._log(f"📄 Proving on scratch copy: {self.path.name} (original untouched)")
@@ -96,6 +98,14 @@ class ScratchProof:
             except OSError as e:
                 self._log(f"⚠️ Could not restore _CoqProject: {e}")
             self._coqproject_backup = None
+        elif not self._coqproject_existed:
+            try:
+                self._coqproject.unlink()
+                self._log("♻️ Removed generated _CoqProject")
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                self._log(f"⚠️ Could not remove generated _CoqProject: {e}")
 
     def __enter__(self) -> "ScratchProof":
         self.open()

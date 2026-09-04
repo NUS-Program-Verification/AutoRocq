@@ -1,4 +1,15 @@
+from pathlib import Path
+
 import pytest
+
+
+COQPYT_ROOT = Path(__file__).resolve().parent.parent
+
+
+@pytest.fixture(autouse=True)
+def run_from_coqpyt_root(monkeypatch):
+    """Keep CoqPyt's relative test-resource paths valid from a parent suite."""
+    monkeypatch.chdir(COQPYT_ROOT)
 
 
 def pytest_addoption(parser):
