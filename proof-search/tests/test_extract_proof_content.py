@@ -2,13 +2,11 @@
 extract_essential_proof_content: the context trimmer that decides what the LLM
 gets to see of a Why3-generated goal file.
 
-This is pure text processing -- ContextManager.extract_essential_proof_content
-just forwards to utils.coq_utils with its logger -- so these tests call the
-function directly. The old version stood up a whole coq-lsp session and a
-ContextManager (and so needed the libraries and an API key) to reach it, then
-collected its four checks into a dict, printed a tick or a cross for each and
-returned the conjunction. pytest ignores that return, so every check could fail
-and the test still passed.
+The fallback is pure text processing, while the runtime path uses CoqPyt's
+parsed context to distinguish global references from binders and declaration
+names. The old tests stood up a whole ContextManager and collected checks into
+a returned boolean that pytest ignored, so every check could fail while the
+test still passed.
 """
 
 import sys
@@ -21,6 +19,7 @@ from utils.coq_utils import (
     extract_essential_proof_content,
     find_transitive_dependencies,
 )
+from coqpyt.coq.proof_file import ProofFile
 from utils.logger import setup_logger
 
 logger = setup_logger("test_extract_proof_content")
@@ -30,6 +29,19 @@ GOAL_FILE = PROJECT_ROOT / "examples" / "main_loop_invariant_2_established_Coq.v
 
 def extract(content):
     return extract_essential_proof_content(logger, content)
+
+
+def extract_with_coqpyt(path):
+    with ProofFile(str(path), workspace=str(path.parent)) as proof_file:
+        proof_file.run()
+        proof = proof_file.unproven_proofs[0]
+        return extract_essential_proof_content(
+            logger,
+            path.read_text(encoding="utf-8"),
+            proof=proof,
+            file_context=proof_file.context,
+            file_path=proof_file.path,
+        )
 
 
 def test_a_why3_goal_file_keeps_its_imports_theorem_and_used_definitions():
@@ -138,3 +150,82 @@ def test_a_cycle_in_the_dependency_graph_terminates():
     }
 
     assert find_transitive_dependencies({"a"}, definitions) == {"a", "b"}
+
+
+def test_text_fallback_keeps_an_inductive_dependency():
+    source = "\n".join(
+        [
+            "Inductive addr :=",
+            "  | addr'mk : nat -> addr.",
+            "Definition address_value (a : addr) : nat :=",
+            "  match a with addr'mk n => n end.",
+            "Theorem wp_goal : forall a : addr, address_value a = address_value a.",
+            "Proof.",
+            "Admitted.",
+        ]
+    )
+
+    extracted = extract(source)
+
+    assert "Inductive addr" in extracted
+    assert "addr'mk : nat -> addr" in extracted
+    assert "Definition address_value" in extracted
+
+
+def test_coqpyt_context_handles_declaration_forms_and_transitive_dependencies(
+    tmp_path, caplog
+):
+    source = "\n".join(
+        [
+            "From Stdlib Require Import Arith.",
+            "Inductive addr :=",
+            "  | addr'mk : nat -> addr.",
+            "Record box := { unbox : addr }.",
+            "Fixpoint countdown (n : nat) : nat :=",
+            "  match n with O => O | S n' => countdown n' end.",
+            "Definition address_value (a : addr) : nat :=",
+            "  match a with addr'mk n => countdown n end.",
+            "Definition boxed_value (b : box) : nat := address_value (unbox b).",
+            "Definition unused_value : nat := 42.",
+            "Theorem wp_goal : forall (b : box), boxed_value b = boxed_value b.",
+            "Proof.",
+            "Admitted.",
+        ]
+    )
+    path = tmp_path / "declarations.v"
+    path.write_text(source, encoding="utf-8")
+
+    extracted = extract_with_coqpyt(path)
+
+    expected = [
+        "Inductive addr",
+        "Record box",
+        "Fixpoint countdown",
+        "Definition address_value",
+        "Definition boxed_value",
+        "Theorem wp_goal",
+    ]
+    positions = [extracted.index(fragment) for fragment in expected]
+    assert positions == sorted(positions)
+    assert "addr'mk : nat -> addr" in extracted
+    assert "Definition unused_value" not in extracted
+    assert "Missing definitions for theorem" not in caplog.text
+
+
+def test_coqpyt_context_deduplicates_an_inductive_and_its_constructor(tmp_path):
+    source = "\n".join(
+        [
+            "Inductive addr :=",
+            "  | addr'mk : nat -> addr.",
+            "Theorem wp_goal : forall n, addr'mk n = addr'mk n.",
+            "Proof.",
+            "Admitted.",
+        ]
+    )
+    path = tmp_path / "constructor.v"
+    path.write_text(source, encoding="utf-8")
+
+    extracted = extract_with_coqpyt(path)
+
+    assert extracted.count("Inductive addr") == 1
+    assert extracted.count("addr'mk : nat -> addr") == 1
