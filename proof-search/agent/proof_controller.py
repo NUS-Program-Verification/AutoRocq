@@ -684,6 +684,13 @@ class ProofController:
             if creates_branching:
                 if self.proof_tree.open_subgoals:
                     self.logger.debug(f"🌳 Branching tactic detected: {len(subgoals_before)} -> {len(subgoals_after)} subgoals")
+                    # CoqPyt returns every goal after the tactic, including
+                    # background goals that were already open. Only the prefix
+                    # replacing the focused goal is new.
+                    new_subgoal_count = (
+                        len(subgoals_after) - len(subgoals_before) + 1
+                    )
+                    new_subgoals = subgoals_after[:new_subgoal_count]
                     # Add branching node with intermediate subgoal nodes
                     node = self.proof_tree.add_branching_node(
                         tactic=successful_tactic,
@@ -692,9 +699,9 @@ class ProofController:
                         hypotheses_before=hypotheses_before,
                         hypotheses_after=hypotheses_after.strip() if hypotheses_after else '',
                         step_number=self.global_step_id,
-                        subgoals=subgoals_after
+                        subgoals=new_subgoals
                     )
-                    self.logger.debug(f"🌳 Added branching node: {len(subgoals_after)} subgoals created")
+                    self.logger.debug(f"🌳 Added branching node: {len(new_subgoals)} subgoals created")
                 else:
                     self.logger.warning(f"⚠️  No open subgoals to attach branching tactic [{successful_tactic}] to. Skipping node addition.")
 
