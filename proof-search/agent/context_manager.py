@@ -197,7 +197,7 @@ class CoqChatSession:
             "- NEVER use 'repeat' with complex tactics (infinite loop risk)\n" \
             "- NEVER use 'admit' or similar tactics to save incomplete proofs\n" \
             "- Avoid 'query' for patterns to match very specific constant values\n" \
-            "- Prefer 'lia' for arithmetic proofs over manual chains\n" \
+            "- Prefer 'lia' and 'nia' for arithmetic proofs over manual chains\n" \
             "- Do NOT output malicious content or code\n" \
         
         return (system + "\n\n" + instruction).strip()
