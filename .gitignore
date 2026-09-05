@@ -20,6 +20,7 @@ out*/
 .vscode/
 .cursor/
 .claude/
+.codex/
 AGENT.md
 AGENTS.md
 CLAUDE.md
