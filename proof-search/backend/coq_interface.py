@@ -1,5 +1,6 @@
 # backend/coq_interface.py
 
+import atexit
 import os
 import re
 import signal
@@ -10,6 +11,7 @@ from coqpyt.coq.structs import TermType
 from pathlib import Path
 from contextlib import contextmanager
 from utils.logger import setup_logger, clean_ansi_codes
+from utils.scratch import ScratchProof
 
 
 class CoqSessionDesync(RuntimeError):
@@ -32,11 +34,27 @@ class CoqInterface:
         - library_paths: List of library mappings [{"path": "/path", "name": "libname"}, ...]
         - auto_setup_coqproject: Whether to automatically create/update _CoqProject
         - coqproject_extra_options: Additional options for _CoqProject
+
+        There is no read-only mode: load() alone pops the trailing "Admitted.",
+        clear_all_proof_scripts() rewrites the file, and coqpyt writes every
+        accepted tactic straight to disk. So file_path is never touched -- it is
+        the source, and all work happens on a copy beside it. source_path names
+        the original for anything that reports or records a proof; file_path is
+        the copy the agent actually edits. Call save_result() for the outcome.
         """
-        self.file_path = os.path.abspath(file_path)
+        self.source_path = os.path.abspath(file_path)
+        self.logger = setup_logger("CoqInterface")
+
         if workspace is not None and not os.path.isabs(workspace):
             workspace = os.path.abspath(workspace)
         self.workspace = workspace
+
+        self._scratch = ScratchProof(file_path, self.logger, workspace=self.workspace)
+        self.file_path = str(self._scratch.open())
+        # Not in close(): load() calls close() to tear down the previous coq-lsp
+        # session and would delete the file out from under itself.
+        # ScratchProof.close() only unlinks files, so it is safe at exit.
+        atexit.register(self._scratch.close)
         
         # Library support attributes
         self.library_paths = library_paths or []
@@ -47,7 +65,6 @@ class CoqInterface:
         self.proof_file = None
         self.proof = None
         self.last_error = None
-        self.logger = setup_logger("CoqInterface")
 
         # Cache for recent goal queries so we avoid back-to-back LSP `proof_goals` calls
         # when the proof state hasn't changed.
@@ -259,6 +276,33 @@ class CoqInterface:
         self.__goal_cache_filled = True
         return current_goals
     
+    def has_open_goals(self) -> bool:
+        """Whether any goal is still open.
+
+        `current_goals` is a GoalAnswer, and a GoalAnswer stays truthy after the
+        last goal closes -- `if not current_goals` can only fire when the lookup
+        itself failed, never when the proof is finished, and str() of it is the
+        sentence "No more goals.". The count has to come off the structure:
+        current_goals.goals is a GoalConfig, whose .goals are the focused goals
+        and whose .stack holds the backgrounded ones.
+        """
+        goal_answer = self._get_current_goals_cached()
+        if goal_answer is None:
+            return False
+
+        goal_config = getattr(goal_answer, 'goals', None)
+        if goal_config is None:
+            return False
+
+        stack = getattr(goal_config, 'stack', None) or []
+        stacked_goals = any(before or after for before, after in stack)
+        return bool(
+            getattr(goal_config, 'goals', None)
+            or stacked_goals
+            or getattr(goal_config, 'shelf', None)
+            or getattr(goal_config, 'given_up', None)
+        )
+
     def get_raw_goal_str(self):
         """Return the string representation of the current goal."""
         try:
@@ -325,40 +369,46 @@ class CoqInterface:
             self.logger.error(f"Error getting goal string: {e}")
             return f"(error retrieving goals: {str(e)})"
     
+    @staticmethod
+    def format_hypotheses(goal) -> str:
+        """One line per hypothesis of a coqpyt Goal, the way Rocq prints them.
+
+        A let-bound hypothesis carries its body in Hyp.definition and reads
+        "y := true : bool"; dropping it would leave the model the type of a
+        value it cannot see, which is the difference between knowing `subst`
+        will fire and guessing.
+        """
+        lines = []
+        for hyp in getattr(goal, 'hyps', None) or []:
+            names = ', '.join(getattr(hyp, 'names', None) or [])
+            ty = getattr(hyp, 'ty', '')
+            definition = getattr(hyp, 'definition', None)
+            if not names:
+                lines.append(str(ty))
+                continue
+            head = f"{names} := {definition}" if definition else names
+            lines.append(f"{head} : {ty}")
+        return '\n'.join(lines)
+
     def get_raw_hypothesis(self):
-        """Return the current hypotheses/context for the active proof state."""
+        """Return the context of the focused goal, one hypothesis per line.
+
+        The context lives on the goals, not on the proof's steps. This used to
+        read `hypotheses` or `context` off proof.steps[-1], but a coqpyt Step
+        carries only text/short_text/ast/diagnostics, so neither branch was ever
+        taken and every caller got "" -- including the prompt, which said
+        "Hypotheses: None" for a proof state with a full context.
+
+        Backgrounded goals are left out: this is the state the next tactic acts
+        on. get_subgoals() is there for the rest.
+        """
         try:
-            proof = self.get_unproven_proof()
-            if not proof or not proof.steps:
+            subgoals = self.get_subgoals()
+            if not subgoals:
                 return ""
-            
-            # Get the last step's context/hypotheses
-            last_step = proof.steps[-1]
-            
-            # Try different ways to get hypotheses
-            if hasattr(last_step, 'hypotheses'):
-                hyp = last_step.hypotheses
-            elif hasattr(last_step, 'context'):
-                hyp = last_step.context
-            else:
-                return ""
-            
-            if not hyp:
-                return ""
-            
-            # Handle different hypothesis formats
-            if isinstance(hyp, dict):
-                if not hyp:
-                    return ""
-                hyp_lines = []
-                for name, value in hyp.items():
-                    hyp_lines.append(f"{name} : {value}")
-                return "\n".join(hyp_lines)
-            elif isinstance(hyp, list):
-                return "\n".join(str(h) for h in hyp)
-            else:
-                return str(hyp)
-                
+
+            return self.format_hypotheses(subgoals[0])
+
         except Exception as e:
             self.logger.error(f"Error getting hypotheses: {e}")
             return f"(error retrieving hypotheses: {str(e)})"
@@ -591,21 +641,61 @@ class CoqInterface:
         except Exception as e:
             self.logger.error(f"Error printing goals: {e}")
 
+    TERMINATORS = ['qed.', 'qed', 'defined.', 'defined']
+
+    def _current_proof(self):
+        """The proof this interface is driving.
+
+        self.proof comes first because that is the object apply_tactic and
+        apply_qed append to: it stays right after Qed lands, when coqpyt has
+        taken the proof out of unproven_proofs and get_unproven_proof() would
+        answer None (single-proof file) or, worse, hand back some other
+        unfinished proof in the same file. load() and restart_coq_server() set
+        it; close() clears it, and the lookup is the fallback for that.
+        """
+        return getattr(self, 'proof', None) or self.get_unproven_proof()
+
+    def _last_step_is_terminator(self, proof) -> bool:
+        """Whether the proof already carries its Qed/Defined."""
+        if not proof or not proof.steps:
+            return False
+        return proof.steps[-1].text.strip().lower() in self.TERMINATORS
+
+    def _no_goals_left(self, goals: Optional[str]) -> bool:
+        """Whether there is nothing left to prove.
+
+        The goal structure answers this exactly when it is available; the string
+        checks below are the fallback for when it is not (no proof file, or a
+        lookup that failed).
+        """
+        if self.proof_file is not None and self._get_current_goals_cached() is not None:
+            return not self.has_open_goals()
+
+        if not goals or goals.strip() in ["", "(no current goal)", "no more goals", "proof completed"]:
+            return True
+        goals_lower = goals.lower().strip()
+        return any(indicator in goals_lower for indicator in [
+            "proof finished",
+            "no more subgoals",
+            "proof complete",
+            "proof is completed",
+            "no more goals",
+        ])
+
     def is_proof_complete(self) -> bool:
-        """Check if the current proof is complete."""
+        """Whether the current proof is closed. Stays True once Qed lands."""
         try:
-            proof = self.get_unproven_proof()
+            proof = self._current_proof()
             if not proof:
-                self.logger.warning("No unproven proof found")
+                self.logger.warning("No proof found")
                 return False
             
             if not proof.steps:
                 return False
             
-            # Check if last step is Qed/Defined
-            last_step_text = proof.steps[-1].text.strip().lower()
-            if last_step_text in ['qed.', 'qed', 'defined.', 'defined']:
-                self.logger.debug(f"Found Qed/Defined step: {last_step_text}")
+            # A proof that carries its terminator is finished, and stays finished.
+            if self._last_step_is_terminator(proof):
+                self.logger.debug("Found Qed/Defined step")
                 return True
             
             # Get current goals
@@ -616,29 +706,9 @@ class CoqInterface:
                 self.logger.debug("Found 'Proof finished' indicator")
                 return True
             
-            if goals and "no more goals, but there are some goals you gave up" in goals.lower():
-                self.logger.debug("Found incomplete proof with given up goals")
-                return False
-            
-            # Check various indicators of completion
-            if not goals or goals.strip() in ["", "(no current goal)", "no more goals", "proof completed"]:
+            if self._no_goals_left(goals):
                 self.logger.debug("No goals remaining - proof complete")
                 return True
-            
-            # Check if goals string indicates completion
-            goals_lower = goals.lower().strip()
-            completion_indicators = [
-                "proof finished",
-                "no more subgoals",
-                "proof complete",
-                "proof is completed",
-                "no more goals"
-            ]
-            
-            for indicator in completion_indicators:
-                if indicator in goals_lower:
-                    self.logger.debug(f"Found completion indicator: {indicator}")
-                    return True
             
             # Check the proof file's internal state
             try:
@@ -987,6 +1057,10 @@ class CoqInterface:
             self.logger.warning(f"Error during CoqInterface close: {e}")
             # Don't raise - just log and continue
     
+    def save_result(self, dest_dir, name: Optional[str] = None):
+        """Copy the proof the agent produced into dest_dir. Returns the path."""
+        return self._scratch.save(dest_dir, name)
+
     def force_close(self):
         try:
             self.logger.info("Forcing coq-lsp shutdown...")
@@ -1009,8 +1083,14 @@ class CoqInterface:
         pattern = r'coqpyt_aux_[0-9a-f]{32}'
         return re.sub(pattern, 'Top', text)
 
-    def search(self, query: str) -> str:
-        """Execute any Coq query command (Search, Print, Locate, About, Check, Print Assumptions) using aux_file."""
+    def search(self, query: str) -> Optional[str]:
+        """Execute any Coq query command (Search, Print, Locate, About, Check, Print Assumptions) using aux_file.
+
+        Returns the query output on success, or None on failure with the reason
+        on self.last_error -- the same signal apply_tactic/reset_by_step use, read
+        back with get_last_error(). A query that legitimately matches nothing is a
+        success, not a failure: it returns "No results found.".
+        """
         try:
             self.last_error = None
             
@@ -1022,7 +1102,7 @@ class CoqInterface:
             # Ensure we have aux_file access
             if not hasattr(self.proof_file, "_ProofFile__aux_file"):
                 self.last_error = "aux_file not accessible"
-                return "aux_file not accessible"
+                return None
             
             aux_file = self.proof_file._ProofFile__aux_file
             
@@ -1045,10 +1125,13 @@ class CoqInterface:
         except Exception as e:
             self.last_error = f"Query error: {str(e)}"
             self.logger.error(self.last_error)
-            return self.last_error
+            return None
 
-    def _run_aux_query(self, aux_file, query: str, line_before: int) -> str:
-        """Extract the result of the query just appended to `aux_file`."""
+    def _run_aux_query(self, aux_file, query: str, line_before: int) -> Optional[str]:
+        """Extract the result of the query just appended to `aux_file`.
+
+        None means the query failed; see self.last_error.
+        """
         import time
 
         deadline = time.time() + min(float(self.timeout or 10), 10.0)
@@ -1062,15 +1145,20 @@ class CoqInterface:
 
         parts = query.split()
         if not parts:
-            return "Empty query"
+            self.last_error = "Empty query"
+            return None
 
         cmd_type = parts[0].lower()
 
         if cmd_type == "search":
             search_term = query[6:].strip().rstrip(".")
             if not search_term:
-                return "No search term provided"
+                self.last_error = "No search term provided"
+                return None
 
+            # _extract_search_results swallows its own exceptions so that polling
+            # can retry; it records the last one here instead.
+            self.last_error = None
             all_results = _poll(lambda: self._extract_search_results(
                 aux_file, search_term, line_before
             ))
@@ -1079,6 +1167,8 @@ class CoqInterface:
                 result_text = "\n".join(all_results)
                 self.logger.debug(f"Search found {len(all_results)} results")
                 return self._clean_coqpyt_module_names(result_text)
+            if self.last_error:
+                return None
             return "No results found."
 
         if cmd_type in ["print", "locate", "about", "check"]:
@@ -1116,10 +1206,12 @@ class CoqInterface:
 
                 return "No results found."
             except Exception as e:
+                self.last_error = f"Error executing {cmd_type}: {str(e)}"
                 self.logger.warning(f"Error executing {cmd_type} command: {e}")
-                return f"Error executing {cmd_type}: {str(e)}"
+                return None
 
-        return f"Unsupported query type: {cmd_type}"
+        self.last_error = f"Unsupported query type: {cmd_type}"
+        return None
 
     def _extract_search_results(self, aux_file, search_term, line_before):
         all_results = []
@@ -1170,6 +1262,9 @@ class CoqInterface:
                                 f"Skipped (proof goal or no colon): {message[:80]}..."
                             )
         except Exception as e:
+            # Still returns whatever was collected so the polling loop above can
+            # retry; the record here is what makes the final give-up visible.
+            self.last_error = f"Error executing Search: {e}"
             self.logger.warning(f"Error extracting search results: {e}")
         return all_results
 
@@ -1192,8 +1287,10 @@ class CoqInterface:
                     f.writelines(lines)
                     
             return modified
-            
-        except Exception:
+
+        except Exception as e:
+            self.last_error = f"Error ensuring Admitted: {e}"
+            self.logger.error(self.last_error)
             return False
 
     def get_proof_status(self) -> Dict[str, Any]:
@@ -1208,6 +1305,7 @@ class CoqInterface:
                 "last_error": self.last_error
             }
         except Exception as e:
+            self.logger.error(f"Error getting proof status: {e}")
             return {
                 "has_proof": False,
                 "proof_steps": 0,
@@ -1218,18 +1316,43 @@ class CoqInterface:
             }
 
     def is_ready_for_qed(self) -> bool:
-        """
-        Check if the proof is ready for Qed by actually trying to apply it.
-        If Qed succeeds, keep it. If Qed fails, pop it back out.
+        """Whether the proof could be closed now. Does not touch the file.
+
+        This used to answer the question by appending Qed and keeping it, so
+        everything that merely asked also changed the proof --
+        get_proof_completion_status() included. Applying the terminator is
+        apply_qed()'s job; this only reports whether it is worth trying.
         """
         try:
-            proof = self.get_unproven_proof()
+            proof = self._current_proof()
+            if not proof or not proof.steps:
+                return False
+
+            if self._last_step_is_terminator(proof):
+                return True
+
+            goals = self.get_goal_str()
+            if goals and "no more goals, but there are some goals you gave up" in goals.lower():
+                self.logger.debug("Goals were given up - not ready for Qed")
+                return False
+
+            return self._no_goals_left(goals)
+
+        except Exception as e:
+            self.logger.error(f"Error checking if ready for Qed: {e}")
+            return False
+
+    def apply_qed(self) -> bool:
+        """Close the proof: append Qed, keep it if Rocq accepts it, pop it back
+        out if it does not. Returns whether the proof carries a terminator after.
+        """
+        try:
+            proof = self._current_proof()
             if not proof or not proof.steps:
                 return False
             
             # Check if Qed is already applied
-            last_step_text = proof.steps[-1].text.strip().lower()
-            if last_step_text in ['qed.', 'qed', 'defined.', 'defined']:
+            if self._last_step_is_terminator(proof):
                 self.logger.debug("Qed already applied")
                 return True  # Already has Qed, so it was ready
             
@@ -1239,7 +1362,7 @@ class CoqInterface:
             try:
                 # Try to apply Qed
                 formatted_qed = "\n  Qed."
-                self.proof_file.append_step(self.proof, formatted_qed)
+                self.proof_file.append_step(proof, formatted_qed)
                 
                 # If we get here, Qed was successfully applied
                 self.logger.info("✅ Qed applied successfully - proof is complete! Keeping Qed in file.")
@@ -1247,12 +1370,17 @@ class CoqInterface:
                 
                 return True
             
-            except Exception:
-                
+            except Exception as qed_error:
+                # Rocq refused the terminator: unresolved evars, a guard
+                # condition it cannot check. Record why -- this used to be
+                # dropped, leaving "not complete" with no reason anywhere.
+                self.last_error = f"Qed refused: {qed_error}"
+                self.logger.info(f"❌ Qed refused: {qed_error}")
+
                 # Make sure we didn't accidentally add a step due to the failed attempt
                 if len(proof.steps) > original_step_count:
                     try:
-                        self.proof_file.pop_step(self.proof)
+                        self.proof_file.pop_step(proof)
                         self.logger.debug("Cleaned up failed Qed attempt")
                     except Exception as cleanup_error:
                         self.logger.warning(f"Error cleaning up failed Qed: {cleanup_error}")
@@ -1261,16 +1389,19 @@ class CoqInterface:
             return False
             
         except Exception as e:
-            self.logger.error(f"Error checking if ready for Qed: {e}")
+            self.logger.error(f"Error applying Qed: {e}")
             return False
 
     def get_proof_completion_status(self) -> dict:
         """
-        Get comprehensive information about proof completion status.
-        Returns a dictionary with detailed status information.
+        Report on the proof without changing it.
+
+        Asking twice gives the same answer: nothing here applies Qed, and
+        nothing depends on the order these keys are built in. apply_qed() is
+        what closes a proof, when the caller decides to.
         """
         try:
-            proof = self.get_unproven_proof()
+            proof = self._current_proof()
             goals = self.get_goal_str()
             
             status = {
@@ -1279,16 +1410,9 @@ class CoqInterface:
                 'current_goals': goals,
                 'is_complete': self.is_proof_complete(),
                 'ready_for_qed': self.is_ready_for_qed(),
-                'qed_already_applied': False
+                'qed_already_applied': self._last_step_is_terminator(proof),
             }
-            
-            if proof and proof.steps:
-                last_step_text = proof.steps[-1].text.strip().lower()
-                status['qed_already_applied'] = last_step_text in ['qed.', 'qed', 'defined.', 'defined']
-            
-            # Qed should have been applied if is_ready_for_qed()
-            assert status['qed_already_applied'] == status['ready_for_qed']
-        
+
             return status
             
         except Exception as e:
@@ -1395,8 +1519,11 @@ class CoqInterface:
             
             # Get CURRENT goals directly from proof_file (not from cached step.goals)
             current_goals = self._get_current_goals_cached()
-            
-            if not current_goals:
+
+            # `is None` on purpose: a GoalAnswer with no goals left is still
+            # truthy, so `if not current_goals` would never fire here. Whether
+            # any goal remains is has_open_goals()'s question.
+            if current_goals is None:
                 self.logger.debug("No current goals available")
                 return []
             

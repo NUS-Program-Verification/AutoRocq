@@ -94,6 +94,12 @@ Examples:
     )
 
     parser.add_argument(
+        "--output-dir",
+        help="Directory for this run's artifacts: the log, the resulting proof, "
+             "and the proof tree (default: autorocq-<timestamp> beside the proof file)"
+    )
+
+    parser.add_argument(
         "--local-session-caching",
         action="store_true",
         help="Use local session caching (stored to a local file)"
@@ -151,16 +157,16 @@ def validate_arguments(args, config: ProofAgentConfig) -> bool:
     return True
 
 
-def setup_output_directory(output_dir: Optional[str]) -> Path:
+def setup_output_directory(output_dir: Optional[str], proof_file: Optional[str] = None) -> Path:
     """Setup output directory for logs, visualizations, etc."""
     if output_dir:
         output_path = Path(output_dir)
     else:
         # Default: create output directory next to proof file
-        proof_file_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".")
+        proof_file_path = Path(proof_file) if proof_file else Path(".")
         output_path = proof_file_path.parent / f"autorocq-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     
-    output_path.mkdir(exist_ok=True)
+    output_path.mkdir(parents=True, exist_ok=True)
     return output_path
 
 
@@ -195,17 +201,6 @@ def initialize_components(args, config: ProofAgentConfig, logger) -> Dict[str, A
                 logger.info(f"   - {lib['name']}: {lib['path']}")
             logger.info(f"🔧 Auto setup CoqProject: {getattr(config.coq, 'auto_setup_coqproject', True)}")
         
-        # If hammer is enabled, add hammer library import to proof file
-        if config.enable_hammer:
-            logger.info("🔧 Hammer enabled. Importing hammer library...")
-            with open(args.proof_file, 'r', encoding='utf-8') as f:
-                content = f.read()
-            if "From Hammer Require Import Hammer." not in content:
-                with open(args.proof_file, 'w', encoding='utf-8') as f:
-                    f.write("From Hammer Require Import Hammer.\nFrom Hammer Require Import Tactics.\n\n" + content)
-            else:
-                logger.debug("🔧 Hammer already imported - skipping")
-        
         coq_interface = CoqInterface(
             file_path=args.proof_file,
             workspace=workspace,
@@ -215,6 +210,30 @@ def initialize_components(args, config: ProofAgentConfig, logger) -> Dict[str, A
             timeout=getattr(config.coq, 'timeout', 60)
         )
         
+        # Everything below edits the file, so it has to come after the
+        # constructor -- that is what puts the scratch copy in place.
+        scratch_file = coq_interface.file_path
+
+        if config.enable_hammer:
+            logger.info("🔧 Hammer enabled. Importing hammer library...")
+            with open(scratch_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+            if "From Hammer Require Import Hammer." not in content:
+                with open(scratch_file, 'w', encoding='utf-8') as f:
+                    f.write("From Hammer Require Import Hammer.\nFrom Hammer Require Import Tactics.\n\n" + content)
+            else:
+                logger.debug("🔧 Hammer already imported - skipping")
+
+        # Clean proof by removing existing tactics. Skip in interactive mode
+        if config.interactive.enabled:
+            logger.debug("🤝 Interactive mode enabled - preserving existing proof tactics")
+            clean_success = ensure_proof_admitted(scratch_file, logger)
+        else:
+            logger.debug("🧹 Pre-cleaning proof file to ensure unproven state...")
+            clean_success = clean_proof_file(scratch_file, logger)
+            if not clean_success:
+                logger.warning("⚠️ Could not clean proof file - will try CoqInterface methods later")
+
         # Load the file using proper method
         success = coq_interface.load()
         if not success:
@@ -276,6 +295,7 @@ def initialize_components(args, config: ProofAgentConfig, logger) -> Dict[str, A
             enable_hammer=config.enable_hammer,
             max_context_search=config.max_context_search,
             history_file=str(history_file),
+            output_dir=config.output_dir,
             interactive=config.interactive
         )
         
@@ -283,7 +303,8 @@ def initialize_components(args, config: ProofAgentConfig, logger) -> Dict[str, A
             "coq_interface": coq_interface,
             "context_manager": context_manager,
             "coq_chat_session": context_manager.chat_session,
-            "controller": controller
+            "controller": controller,
+            "clean_success": clean_success
         }
         
     except Exception as e:
@@ -400,8 +421,8 @@ def cleanup_components(components: Dict[str, Any], logger):
                     with timeout_context(1):
                         component.reset()
                         logger.debug(f"Reset component: {name}")
-                except:
-                    logger.warning(f"Failed to reset {name}")
+                except Exception as reset_error:
+                    logger.warning(f"Failed to reset {name}: {reset_error}")
                 
     except Exception as e:
         logger.error(f"Critical error during cleanup: {e}")
@@ -545,6 +566,17 @@ def clean_proof_file(file_path: str, logger) -> bool:
         return False
 
 
+def _harvest_proof(components, output_dir, logger):
+    """Save whatever the agent proved into the run's output directory."""
+    coq_interface = (components or {}).get("coq_interface")
+    if coq_interface is None:
+        return
+    try:
+        coq_interface.save_result(output_dir)
+    except Exception as e:
+        logger.warning(f"Could not save the resulting proof: {e}")
+
+
 def main():
     """Main entry point with history management."""
     
@@ -560,6 +592,8 @@ def main():
         if components and logger:
             cleanup_components(components, logger)
         
+        _harvest_proof(components, output_dir, logger)
+
         sys.exit(128 + signum)
     
     # Register signal handlers
@@ -583,7 +617,10 @@ def main():
         sys.exit(1)
     
     # Setup output directory
-    output_dir = setup_output_directory(config.output_dir)
+    output_dir = setup_output_directory(args.output_dir or config.output_dir, args.proof_file)
+
+    # Record the resolved directory so components write their artifacts there.
+    config.output_dir = str(output_dir)
     
     # Use absolute path
     args.proof_file = str(Path(args.proof_file).resolve())
@@ -648,16 +685,6 @@ def main():
     if args.interactive:
         config.interactive.enabled = True
 
-    # Clean proof by removing existing tactics. Skip in interactive mode
-    if config.interactive.enabled:
-        logger.debug("🤝 Interactive mode enabled - preserving existing proof tactics")
-        clean_success = ensure_proof_admitted(args.proof_file, logger)
-    else:
-        logger.debug("🧹 Pre-cleaning proof file to ensure unproven state...")
-        clean_success = clean_proof_file(args.proof_file, logger)
-        if not clean_success:
-            logger.warning("⚠️ Could not clean proof file - will try CoqInterface methods later")
-
     # Initialize components
     try:
         components = initialize_components(args, config, logger)  # Pass both args and config
@@ -668,6 +695,7 @@ def main():
         
         # Log final proof file verification
         coq_interface = components["coq_interface"]
+        clean_success = components["clean_success"]
         logger.info(f"✅ Coq interface loaded: {coq_interface.file_path}")
         
         if not clean_success and not config.interactive.enabled:
@@ -776,6 +804,9 @@ def main():
             logger.warning(f"Could not retrieve token statistics: {e}")
         
         cleanup_components(components, logger)
+        
+        # Coq session is closed, so the scratch copy is safe to harvest.
+        _harvest_proof(components, output_dir, logger)
         
     sys.exit(exit_code)
 

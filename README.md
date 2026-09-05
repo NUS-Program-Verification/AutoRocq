@@ -107,7 +107,7 @@ If AutoRocq runs successfully, you will be able to see in the terminal
 ```
 [INFO] [Main]: 🎉 Proof completed successfully!
 ```
-and the proof script is saved in the same [`example.v`](proof-search/examples/example.v) file. You will also be able to find saved proof states and aggregated results at `data/`, which can be reused to prove other goals in the future.
+The proof runs on a throwaway copy, so [`example.v`](proof-search/examples/example.v) itself is left untouched; the resulting proof script is written to the run's output directory, `examples/autorocq-<timestamp>/example.v` by default (use `--output-dir` to choose your own). You will also be able to find saved proof states and aggregated results at `data/`, which can be reused to prove other goals in the future.
 
 For more configurations of the tool, check out the [readme](proof-search/configs/readme.md) or run with `--help` for more options.
 

@@ -2,453 +2,398 @@
 Test script for Context Search Module with Adaptive Result Reduction
 Tests full Coq command search functionality: Search/Print/Check/About/Locate/Print Assumptions
 with adaptive size reduction strategies.
+
+Two levels, deliberately kept apart:
+
+* The query tests run against a real coq-lsp session with the libframac
+  realizations on the load path, and assert on the *content* that comes back.
+  That is what proves context search reaches Rocq and can see the library.
+* The ranking and reduction tests call ResultReducer directly with synthetic
+  input. Which
+  size band a live query lands in is decided purely by len(content), and real
+  output sits close enough to the boundaries that library or Rocq churn would
+  silently move it -- Search to_sint32. is 503 characters against a 500-char
+  boundary. Driving the reducer directly pins every band deterministically.
 """
 
 import sys
-import os
-import json
 from pathlib import Path
-from datetime import datetime
+
+import pytest
 
 # Add the parent directory to the path so we can import from agent
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-try:
-    from agent.context_search import ContextSearch, CoqCommandSearch, SearchResult
-    print("✅ Successfully imported context search modules")
-except ImportError as e:
-    print(f"❌ Failed to import context search modules: {e}")
-    sys.exit(1)
+from agent.context_search import CoqCommandSearch, ResultReducer
+from backend.coq_interface import CoqInterface
+from tests.test_utils import temp_example_copy
+from utils.config import ProofAgentConfig
 
-try:
-    from backend.coq_interface import CoqInterface
-    REAL_COQ_AVAILABLE = True
-    print("✅ Real CoqInterface available")
-except ImportError as e:
-    print(f"❌ Real CoqInterface not available: {e}")
-    sys.exit(1)
+# Work on a throwaway copy: CoqInterface.load() pops the trailing "Admitted."
+# and coqpyt writes that change straight back to the file on disk, which would
+# otherwise leave the tracked example without its proof terminator.
+coq_file = temp_example_copy("main_loop_invariant_2_established_Coq.v")
+config_file = PROJECT_ROOT / "configs" / "default_config.json"
+
+# query -> fragments the result must contain. Substrings, never sizes or exact
+# text: Rocq renders the same term differently depending on which notations are
+# in scope (nat -> nat vs nat → nat under Utf8), and sizes drift with the
+# stdlib. "Abs.Abs_pos" comes from libautorocq/int/Abs.v, so it fails if the
+# libframac mapping is not actually on the load path.
+QUERY_EXPECTATIONS = [
+    ("Search Z.abs.", ["Z.abs_0: Z.abs 0 = 0", "Abs.Abs_pos"]),
+    ("Search to_sint32.", ["is_to_sint32", "id_sint32"]),
+    ("Search is_uint32.", ["is_to_uint32", "id_uint32"]),
+    ("Print nat.", ["Inductive nat : Set"]),
+    ("Print bool.", ["Inductive bool : Set", "true : bool"]),
+    ("Print Assumptions Z.abs.", ["Closed under the global context"]),
+    ("Locate le.", ["Corelib.Init.Peano.le"]),
+    ("About Z.abs.", ["Z.abs", "not universe polymorphic"]),
+    ("About to_sint32.", ["to_sint32", "not universe polymorphic"]),
+    ("Check nat.", ["nat", ": Set"]),
+    ("Check bool.", ["bool", ": Set"]),
+    ("Check to_sint32.", ["to_sint32", "int -> int"]),
+]
+
+# method, argument, goal context, fragments the content must contain
+SEARCH_EXPECTATIONS = [
+    ("search_lemma", "Z.abs", "0 <= Z.abs x", ["Z.abs"]),
+    ("search_lemma", "to_sint32", "is_sint32 (to_sint32 x)", ["to_sint32"]),
+    ("search_pattern", "(_ <= _)", "x <= y -> y <= z -> x <= z", ["<="]),
+    ("print_definition", "nat", "", ["Inductive nat : Set"]),
+    ("print_definition", "bool", "", ["Inductive bool : Set"]),
+    ("check_term", "to_sint32", "", ["to_sint32"]),
+    ("about_identifier", "Z.abs", "", ["Z.abs"]),
+    ("locate_definition", "le", "", ["le"]),
+    ("auto_search", "Print bool.", "", ["Inductive bool : Set"]),
+]
+
+# Entries shaped like _parse_search_entries output, for the ranking tests.
+RANK_ENTRIES = [
+    {"name": "Z.abs_nonneg", "signature": "forall n : int, 0 <= Z.abs n", "module": "Z"},
+    {"name": "Zis_gcd_0_abs", "signature": "forall a : int, Zis_gcd 0 a", "module": "Znumtheory"},
+    {"name": "le_refl", "signature": "forall n : int, n <= n", "module": "Z"},
+]
+
+# len(content), query_type -> the band ResultReducer must pick.
+# Boundaries matter: max_small_result is inclusive, so 500 is still "none" and
+# 501 is the first medium result.
+REDUCTION_BANDS = [
+    (100, "search_lemma", "none"),
+    (100, "print_definition", "none"),
+    (500, "search_lemma", "none"),
+    (500, "print_definition", "none"),
+    (501, "search_lemma", "boundary_aware_truncation"),
+    (501, "print_definition", "simple_truncation"),
+    (750, "search_lemma", "boundary_aware_truncation"),
+    (1000, "search_lemma", "boundary_aware_truncation"),
+    (1000, "print_definition", "simple_truncation"),
+    (1001, "search_lemma", "structured_summary"),
+    (1001, "print_definition", "boundary_aware_truncation"),
+    (5000, "search_lemma", "structured_summary"),
+    (5000, "print_definition", "boundary_aware_truncation"),
+]
 
 
-def check_coq_setup():
-    """Check if CoqInterface can be properly initialized."""
+def load_config():
+    return ProofAgentConfig.from_file(str(config_file))
+
+
+def assert_real_result(query, result):
+    """Fail on anything that is not a genuine query hit.
+
+    CoqInterface.search() returns None on failure (reason on last_error), and
+    CoqCommandSearch turns that into content prefixed "Query failed:". Neither
+    is a result, and nor is a successful-but-empty "No results found." for the
+    queries asserted here.
+    """
+    assert result is not None, f"{query}: query failed (search returned None)"
+    assert result, f"{query}: empty result"
+    assert not result.startswith("Query failed:"), f"{query}: {result}"
+    assert result != "No results found.", f"{query}: query found nothing"
+
+
+_interface = None
+
+
+def get_interface():
+    """One coq-lsp session, shared by every live test.
+
+    Starting coq-lsp and replaying the goal file costs most of the runtime, and
+    none of the live tests changes the proof state -- they only issue queries --
+    so one session serves all of them. Torn down explicitly by the fixture
+    below (or by __main__): closing it from an atexit hook instead deadlocks,
+    because coqpyt's LSP client shuts its threads down during interpreter exit.
+
+    The workspace and library_paths are not optional: without the libframac
+    mapping the goal file's statement does not typecheck, no proof is opened,
+    and load() dies in coqpyt with "pop from empty list".
+    """
+    global _interface
+    if _interface is None:
+        config = load_config()
+        coq = CoqInterface(
+            file_path=str(coq_file),
+            workspace=config.coq.workspace or str(coq_file.parent),
+            library_paths=config.coq.library_paths,
+            auto_setup_coqproject=config.coq.auto_setup_coqproject,
+            coqproject_extra_options=config.coq.coqproject_extra_options,
+            timeout=config.coq.timeout,
+        )
+        assert coq.load(), f"CoqInterface.load() failed: {coq.get_last_error()}"
+        print("✅ CoqInterface loaded")
+        _interface = coq
+    return _interface
+
+
+def close_interface():
+    global _interface
+    if _interface is not None:
+        _interface.close()
+        _interface = None
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _shared_interface():
+    """Close the shared session once this module's tests are done."""
+    yield
+    close_interface()
+
+
+def make_search_output(size):
+    """A block of Search-shaped entries of exactly `size` characters."""
+    entry = "Lemma foo_bar_baz : forall x y : Z, x + y = y + x\n"
+    return (entry * (size // len(entry) + 1))[:size]
+
+
+def test_coq_setup():
+    """The fixture file and every configured library have to actually be there."""
     print("\n🔧 Checking CoqInterface Setup...")
-    
-    # Check if files exist
-    workspace = PROJECT_ROOT / "examples"
-    proof_file = PROJECT_ROOT / "examples" / "main_loop_invariant_2_established_Coq.v"
-    lib_path = PROJECT_ROOT / "lib-sv-comp"
-    
-    print(f"📁 Workspace exists: {Path(workspace).exists()}")
-    print(f"📄 Proof file exists: {Path(proof_file).exists()}")
-    print(f"📚 Library path exists: {Path(lib_path).exists()}")
-    
-    # Check proof file content
-    if Path(proof_file).exists():
-        with open(proof_file, 'r') as f:
-            content = f.read()
-            print(f"📄 Proof file size: {len(content)} characters")
-            
-            # Check if proof is complete
-            if content.strip().endswith('Proof.'):
-                print("✅ Proof file ends with 'Proof.' - perfect for testing!")
-                print("   This means we can enter proving mode for search commands")
-            elif 'Qed.' in content or 'Defined.' in content:
-                print("✅ Proof file contains completed proofs")
-            else:
-                print("⚠️  Proof file status unclear")
-    
-    if Path(lib_path).exists():
-        lib_files = list(Path(lib_path).glob("*.v"))
-        print(f"📚 Library files found: {len(lib_files)}")
-        for f in lib_files[:5]:  # Show first 5 files
-            print(f"   - {f.name}")
-    
-    return Path(workspace).exists() and Path(proof_file).exists()
+
+    assert coq_file.exists(), f"missing fixture: {coq_file}"
+    content = coq_file.read_text()
+    print(f"📄 Proof file: {coq_file.name}, {len(content)} characters")
+    assert "Proof." in content, "fixture has no proof to open"
+
+    library_paths = load_config().coq.library_paths
+    assert library_paths, "default_config.json declares no library paths"
+    for lib in library_paths:
+        lib_path = Path(lib["path"])
+        assert lib_path.is_dir(), f"{lib['name']}: {lib_path} is not a directory"
+        lib_files = list(lib_path.rglob("*.v"))
+        assert lib_files, f"{lib['name']}: no .v files under {lib_path}"
+        print(f"📚 {lib['name']}: {len(lib_files)} .v files under {lib_path}")
 
 
-def test_coq_interface_initialization():
-    """Test CoqInterface initialization with full query command testing."""
-    print("\n🔬 Testing CoqInterface Initialization (Full Query Commands)")
-    print("=" * 50)
-    
-    # Use the correct initialization pattern from LLM test
-    proof_file_path = PROJECT_ROOT / "examples" / "main_loop_invariant_2_established_Coq.v"    
-    try:
-        # Initialize CoqInterface with just file path (like in LLM test)
-        coq = CoqInterface(proof_file_path)
-        print("✅ CoqInterface object created")
-        
-        # Load the file (essential step!)
-        coq.load()
-        print("✅ CoqInterface loaded successfully")
-        
-        # Check what we have
-        attrs = [attr for attr in dir(coq) if not attr.startswith('_')]
-        print(f"Available methods: {attrs}")
-        
-        # Test basic functionality
-        print("\n🧪 Testing basic functionality:")
-        
-        # Check goals and hypotheses
-        try:
-            goals = coq.get_goal_str()
-            hypotheses = coq.get_hypothesis()
-            print(f"✅ Current goals: {goals}")
-            print(f"✅ Current hypotheses: {hypotheses}")
-        except Exception as e:
-            print(f"⚠️  Goal/hypothesis check: {e}")
-        
-        # Test all query command functionality (the key part!)
-        print("\n🔍 Testing full query command functionality:")
-        
-        search_commands = [
-            # Search commands (these should trigger reduction)
-            "Search Z.abs.",
-            "Search (_ <= _).",
-            "Search (_ + _).",
-            "Search (forall _ : int, _ \/ _).",
-            # Print commands (small results)
-            "Print Z.abs.",
-            "Print nat.",
-            "Print bool.",
-            # Print Assumptions commands
-            "Print Assumptions.",
-            "Print Assumptions Z.abs.",
-            # Locate commands
-            "Locate le.",
-            "Locate mult.",
-            # About commands
-            "About Z.",
-            "About nat.",
-            # Check commands
-            "Check nat.",
-            "Check bool.",
-        ]
-        
-        successful_searches = 0
-        command_results = {}
-        total_result_size = 0
-        reduction_summary = {'none': 0, 'boundary_aware_truncation': 0, 'structured_summary': 0, 'simple_truncation': 0}
-        
-        for cmd in search_commands:
-            try:
-                print(f"\n--- {cmd} ---")
-                result = coq.search(cmd)
-                result_size = len(result) if result else 0
-                total_result_size += result_size
-                
-                print(f"✅ Query result: {result[:200]}...")
-                print(f"📊 Raw result size: {result_size} characters")
-                successful_searches += 1
-                
-                # Categorize results by command type
-                cmd_type = cmd.split()[0].lower()
-                if cmd_type not in command_results:
-                    command_results[cmd_type] = {'count': 0, 'total_size': 0, 'raw_total': 0}
-                command_results[cmd_type]['count'] += 1
-                command_results[cmd_type]['raw_total'] += result_size
-                
-            except Exception as e:
-                print(f"❌ Query failed: {e}")
-        
-        print(f"\n📊 Raw Results Summary:")
-        print(f"📊 Successful queries: {successful_searches}/{len(search_commands)}")
-        print(f"📊 Total raw result size: {total_result_size} characters")
-        print(f"📊 Average raw result size: {total_result_size / successful_searches:.1f} characters" if successful_searches > 0 else "")
-        print(f"📊 Raw results by command type:")
-        for cmd_type, data in command_results.items():
-            avg_size = data['raw_total'] / data['count'] if data['count'] > 0 else 0
-            print(f"   - {cmd_type.upper()}: {data['count']} successful, {data['raw_total']} total chars, {avg_size:.1f} avg chars")
-        
-        # Clean up
-        coq.close()
-        return successful_searches > 0
-        
-    except Exception as e:
-        print(f"❌ CoqInterface initialization failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+def test_query_commands_return_real_results():
+    """Every query command has to come back with the content it should."""
+    print("\n🔍 Testing full query command functionality:")
+
+    coq = get_interface()
+    for query, expected in QUERY_EXPECTATIONS:
+        result = coq.search(query)
+        assert_real_result(query, result)
+        for fragment in expected:
+            assert fragment in result, (
+                f"{query}: expected {fragment!r} in result, got {result[:300]!r}"
+            )
+        print(f"  ✅ {query:26} {len(result):6d} chars")
 
 
-def test_coq_command_search_with_reduction():
-    """Test CoqCommandSearch functionality with adaptive result reduction."""
-    print("\n" + "=" * 60)
-    print("TESTING CoqCommandSearch with Adaptive Result Reduction")
-    print("=" * 60)
-    
-    # Check setup first
-    if not check_coq_setup():
-        print("❌ CoqInterface setup check failed - skipping test")
-        return False
-    
-    # Test correct initialization first
-    if not test_coq_interface_initialization():
-        print("❌ CoqInterface initialization failed - skipping CoqCommandSearch test")
-        return False
-    
-    # Initialize CoqInterface using correct pattern
-    proof_file_path = PROJECT_ROOT / "examples" / "main_loop_invariant_2_established_Coq.v"
+def test_command_search_returns_real_content():
+    """The same, through CoqCommandSearch, with its size bookkeeping checked."""
+    print("\n🔬 Testing CoqCommandSearch:")
 
-    try:
-        # Use the correct initialization pattern
-        coq_interface = CoqInterface(str(proof_file_path))
-        coq_interface.load()  # Essential!
-        print("✅ CoqInterface initialized and loaded for reduction testing")
-        
-        # Create CoqCommandSearch
-        coq_search = CoqCommandSearch(coq_interface)
-        
-        # Test cases specifically designed to test reduction strategies
-        test_cases = [
-            # Large search results (should trigger structured summarization)
-            ("Search pattern (_ <= _) - Large Result", "search_pattern", None, "(_ <= _)", "forall x y z : Z, x <= y -> y <= z -> x <= z"),
-            ("Search pattern (_ + _) - Large Result", "search_pattern", None, "(_ + _)", "forall x y : Z, x + y = y + x"),
-            ("Search lemma Z.abs - Large Result", "search_lemma", "Z.abs", None, "forall x : Z, 0 <= Z.abs x"),
-            
-            # Medium results (should trigger boundary-aware truncation)
-            ("Search lemma mult", "search_lemma", "mult", None, "multiplication"),
-            
-            # Small results (should remain unchanged)
-            ("Print definition Z.abs", "print_definition", "Z.abs", None, ""),
-            ("Print definition nat", "print_definition", "nat", None, ""),
-            ("Check Z.abs", "check_term", "Z.abs", None, ""),
-            ("Check nat", "check_term", "nat", None, ""),
-            ("About Z.abs", "about_identifier", "Z.abs", None, ""),
-            ("Locate le", "locate_definition", "le", None, ""),
-            
-            # Auto search tests
-            ("Auto search - Search (_ * _)", "auto_search", "Search (_ * _).", None, "multiplication associativity"),
-            ("Auto search - Print bool", "auto_search", "Print bool.", None, ""),
-        ]
-        
-        successful_tests = 0
-        results_by_reduction = {'none': [], 'boundary_aware_truncation': [], 'structured_summary': [], 'simple_truncation': []}
-        total_original_size = 0
-        total_final_size = 0
-        total_bytes_saved = 0
-        
-        for test_name, method_name, identifier, pattern, goal_context in test_cases:
-            print(f"\n--- {test_name} ---")
-            print(f"Method: {method_name}")
-            if identifier:
-                print(f"Identifier: {identifier}")
-            if pattern:
-                print(f"Pattern: {pattern}")
-            if goal_context:
-                print(f"Goal context: {goal_context}")
-            
-            try:
-                # Execute the search with goal context for relevance ranking
-                if method_name == "search_lemma":
-                    result = coq_search.search_lemma(identifier, goal_context)
-                elif method_name == "search_pattern":
-                    result = coq_search.search_pattern(pattern, goal_context)
-                elif method_name == "print_definition":
-                    result = coq_search.print_definition(identifier)
-                elif method_name == "print_assumptions":
-                    result = coq_search.print_assumptions(identifier)
-                elif method_name == "locate_definition":
-                    result = coq_search.locate_definition(identifier)
-                elif method_name == "about_identifier":
-                    result = coq_search.about_identifier(identifier)
-                elif method_name == "check_term":
-                    result = coq_search.check_term(identifier)
-                elif method_name == "auto_search":
-                    result = coq_search.auto_search(identifier, goal_context)
-                else:
-                    print(f"❌ Unknown method: {method_name}")
-                    continue
-                
-                # Print reduction analysis
-                print(f"✅ Source: {result.source}")
-                print(f"✅ Relevance: {result.relevance_score}")
-                print(f"📊 Original size: {result.original_size} characters")
-                print(f"📊 Final size: {result.result_size} characters")
-                print(f"🔧 Reduction applied: {result.reduction_applied or 'none'}")
-                
-                if result.original_size > result.result_size:
-                    bytes_saved = result.original_size - result.result_size
-                    reduction_percent = (bytes_saved / result.original_size) * 100
-                    print(f"💾 Bytes saved: {bytes_saved} ({reduction_percent:.1f}% reduction)")
-                    total_bytes_saved += bytes_saved
-                else:
-                    print(f"💾 No reduction needed")
-                
-                # Print content preview (handle None case)
-                if result.content:
-                    print(f"✅ Content preview: {result.content[:150]}...")
-                else:
-                    print(f"⚠️  No content returned")
-                
-                if result.metadata:
-                    print(f"✅ Metadata: {result.metadata}")
-                
-                # Track reduction statistics
-                reduction_method = result.reduction_applied or 'none'
-                results_by_reduction[reduction_method].append({
-                    'test_name': test_name,
-                    'original_size': result.original_size,
-                    'final_size': result.result_size,
-                    'reduction_percent': ((result.original_size - result.result_size) / result.original_size * 100) if result.original_size > 0 else 0
-                })
-                
-                successful_tests += 1
-                total_original_size += result.original_size
-                total_final_size += result.result_size
-                
-            except Exception as e:
-                print(f"❌ Error: {e}")
-                import traceback
-                traceback.print_exc()
-        
-        # Print comprehensive reduction analysis
-        print(f"\n" + "=" * 60)
-        print(f"📊 REDUCTION ANALYSIS SUMMARY")
-        print(f"=" * 60)
-        
-        print(f"📊 Successful tests: {successful_tests}/{len(test_cases)}")
-        print(f"📊 Total original size: {total_original_size:,} characters")
-        print(f"📊 Total final size: {total_final_size:,} characters")
-        print(f"📊 Total bytes saved: {total_bytes_saved:,} characters")
-        
-        if total_original_size > 0:
-            overall_reduction = (total_bytes_saved / total_original_size) * 100
-            print(f"📊 Overall reduction: {overall_reduction:.1f}%")
-        
-        print(f"\n🔧 Reduction Methods Used:")
-        for method, results in results_by_reduction.items():
-            if results:
-                count = len(results)
-                avg_original = sum(r['original_size'] for r in results) / count
-                avg_final = sum(r['final_size'] for r in results) / count
-                avg_reduction = sum(r['reduction_percent'] for r in results) / count
-                
-                print(f"   - {method}: {count} tests")
-                print(f"     → Avg original: {avg_original:.0f} chars")
-                print(f"     → Avg final: {avg_final:.0f} chars") 
-                print(f"     → Avg reduction: {avg_reduction:.1f}%")
-                
-                # Show examples
-                for result in results[:2]:  # Show first 2 examples
-                    print(f"     → Example: {result['test_name']} ({result['original_size']} → {result['final_size']} chars)")
-        
-        # Test specific reduction scenarios
-        print(f"\n🧪 Testing Specific Reduction Scenarios:")
-        
-        # Test large search that should definitely be reduced
-        try:
-            print(f"\n--- Large Search Test: Search (_ * _) ---")
-            large_result = coq_search.search_pattern("(_ * _)", "multiplication commutative associative")
-            print(f"📊 Large search result: {large_result.original_size} → {large_result.result_size} chars")
-            print(f"🔧 Reduction method: {large_result.reduction_applied}")
-            
-            # Print content if available
-            if large_result.content:
-                preview = large_result.content[:200] if len(large_result.content) > 200 else large_result.content
-                print(f"📄 Content preview: {preview}...")
-            else:
-                print(f"⚠️  No content returned")
-            
-            if large_result.reduction_applied == 'structured_summary':
-                print(f"✅ Large result correctly summarized")
-            elif large_result.original_size > 1000:
-                print(f"⚠️  Large result ({large_result.original_size} chars) but reduction method: {large_result.reduction_applied}")
-            else:
-                print(f"✅ Result size acceptable ({large_result.original_size} chars)")
-        except Exception as e:
-            print(f"❌ Large search test failed: {e}")
-        
-        # Clean up
-        coq_interface.close()
-        
-        return successful_tests > 0
-        
-    except Exception as e:
-        print(f"❌ Failed to initialize CoqInterface: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+    coq_search = CoqCommandSearch(get_interface())
+    small_result_limit = ResultReducer().max_small_result
+
+    for method_name, argument, goal_context, expected in SEARCH_EXPECTATIONS:
+        method = getattr(coq_search, method_name)
+        result = method(argument) if not goal_context else method(argument, goal_context)
+
+        label = f"{method_name}({argument})"
+        assert_real_result(label, result.content)
+        assert not result.metadata.get("failed"), f"{label}: {result.metadata}"
+        for fragment in expected:
+            assert fragment in result.content, (
+                f"{label}: expected {fragment!r}, got {result.content[:300]!r}"
+            )
+
+        assert result.original_size > 0, f"{label}: original_size not recorded"
+        assert result.result_size <= result.original_size, (
+            f"{label}: reduction grew the result, "
+            f"{result.original_size} -> {result.result_size}"
+        )
+        # Small results are the one band a live query can pin down safely:
+        # under the threshold nothing may be touched at all.
+        if result.original_size <= small_result_limit:
+            assert result.reduction_applied in (None, "none"), (
+                f"{label}: {result.original_size} chars should not be reduced, "
+                f"got {result.reduction_applied}"
+            )
+            assert result.result_size == result.original_size
+
+        print(
+            f"  ✅ {label:34} {result.original_size:6d} -> {result.result_size:6d} "
+            f"[{result.reduction_applied or 'none'}]"
+        )
 
 
-def run_all_tests():
-    """Run all context search tests focusing on adaptive reduction."""
-    print("🚀 Starting Context Search Tests with Adaptive Result Reduction")
-    print("=" * 90)
-    
-    results = []
-    
-    try:
-        # Test: CoqCommandSearch with adaptive reduction
-        print("\n" + "🧪 TEST: CoqCommandSearch with Adaptive Result Reduction")
-        reduction_result = test_coq_command_search_with_reduction()
-        results.append(("CoqCommandSearch with Reduction", reduction_result))
-        
-        # Summary
-        print("\n" + "=" * 90)
-        print("🏁 TEST RESULTS SUMMARY (ADAPTIVE REDUCTION)")
-        print("=" * 90)
-        
-        passed_tests = 0
-        for test_name, result in results:
-            status = "✅ PASSED" if result else "❌ FAILED"
-            print(f"{test_name}: {status}")
-            if result:
-                passed_tests += 1
-        
-        print(f"\nOverall: {passed_tests}/{len(results)} tests passed")
-        
-        if passed_tests == len(results):
-            print("🎉 ALL REDUCTION TESTS PASSED!")
-            print("✅ Adaptive result reduction working correctly")
-            print("✅ Large search results properly summarized")
-            print("✅ Medium results boundary-aware truncated")
-            print("✅ Small results preserved unchanged")
-            print("✅ Context-aware relevance ranking functional")
-            return True
-        else:
-            print("❌ REDUCTION TESTS FAILED")
-            print("🔧 Check result reduction implementation")
-            return False
-        
-    except Exception as e:
-        print(f"\n❌ Test suite failed with error: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+def test_large_results_are_summarized():
+    """A genuinely large search must be cut down, not passed through."""
+    coq_search = CoqCommandSearch(get_interface())
+    result = coq_search.search_pattern("(_ <= _)", "x <= y -> y <= z -> x <= z")
+
+    assert_real_result("search_pattern((_ <= _))", result.content)
+    assert result.original_size > 1000, (
+        f"expected a large result to summarize, got {result.original_size} chars"
+    )
+    assert result.reduction_applied == "structured_summary"
+    assert result.result_size < result.original_size
+    print(
+        f"\n💾 search_pattern((_ <= _)): {result.original_size} -> "
+        f"{result.result_size} chars [{result.reduction_applied}]"
+    )
+
+
+def test_a_search_with_no_hits_reports_no_results():
+    """A miss is told apart from a hit by its content, nothing else.
+
+    _create_search_result passes Rocq's own wording through, so "No results
+    found." is the whole miss signal. Ranking of real hits is a separate thing
+    and lives in ResultReducer._rank_entries.
+    """
+    coq_search = CoqCommandSearch(get_interface())
+
+    hit = coq_search.search_lemma("Z.abs", "0 <= Z.abs x")
+    assert hit.source == "coq_command"
+    assert hit.result_size > 0 and "No results found" not in hit.content
+
+    miss = coq_search.search_lemma("definitely_not_a_lemma_xyz")
+    assert "No results found" in miss.content, (
+        f"a search with no hits should say so, got {miss.content[:200]!r}"
+    )
+    print(f"\n🎯 hit={hit.result_size} chars, miss={miss.content.strip()!r}")
+
+
+def test_goal_context_changes_the_summary():
+    """The goal context has to actually reach the ranking and change the output."""
+    coq_search = CoqCommandSearch(get_interface())
+
+    # One reducer per call: _structured_summarization mutates result_hit_count,
+    # so a shared instance would make this order-dependent.
+    def summarize(goal_context):
+        return CoqCommandSearch(get_interface()).search_pattern(
+            "(_ <= _)", goal_context
+        ).content
+
+    no_context = summarize("")
+    decidable = summarize("decidable comparison of two integers")
+    logarithms = summarize("log2_land and land_ones bounds")
+
+    assert decidable != no_context, "goal context did not reach the ranking"
+    assert logarithms != no_context, "goal context did not reach the ranking"
+    assert decidable != logarithms, "two different goal contexts produced the same summary"
+    print("\n🎯 goal context changes the summary: 3 distinct summaries for one query")
+
+
+def test_keyword_extraction():
+    """The keyword filter is what the whole ranking is built on."""
+    reducer = ResultReducer()
+    keywords = reducer._extract_keywords("forall x y, 0 <= z.abs x")
+
+    assert "forall" not in keywords, "Coq keywords must be dropped"
+    assert "x" not in keywords and "y" not in keywords, "words under 3 chars must be dropped"
+    assert "abs" in keywords, "z.abs must contribute 'abs' once punctuation is stripped"
+    assert len(keywords) == len(set(keywords)), "keywords must be deduplicated"
+    print(f"\n🔑 keywords from a goal: {sorted(keywords)}")
+
+
+def test_goal_context_reranks_entries():
+    """_rank_entries is the actual ranking -- pin it directly.
+
+    Known defect, recorded rather than fixed: _structured_summarization records
+    hit counts under hash(frozenset(entry.items())) while _rank_entries reads
+    them back under md5(name), so the "exponential decay of frequently
+    retrieved results" branch can never fire.
+    """
+    reducer = ResultReducer()
+    names = lambda ranked: [entry["name"] for entry in ranked]
+
+    # No context means no ranking is possible, so the order must survive intact.
+    assert names(reducer._rank_entries(RANK_ENTRIES, "")) == names(RANK_ENTRIES)
+
+    # A context naming an entry has to pull that entry to the front.
+    gcd_first = names(reducer._rank_entries(RANK_ENTRIES, "Zis_gcd of a and zero"))
+    assert gcd_first[0] == "Zis_gcd_0_abs", gcd_first
+    abs_first = names(reducer._rank_entries(RANK_ENTRIES, "0 <= Z.abs n nonneg"))
+    assert abs_first[0] == "Z.abs_nonneg", abs_first
+
+    # Ranking reorders; it must never drop or duplicate an entry.
+    assert sorted(gcd_first) == sorted(names(RANK_ENTRIES))
+    print(f"🔀 rerank by context: {gcd_first[0]} vs {abs_first[0]}")
+
+
+def test_reduction_bands():
+    """ResultReducer picks its strategy from len(content) alone -- pin every band.
+
+    Three known oddities are recorded by these expectations rather than fixed
+    here, since fixing them changes agent behaviour:
+      * boundary_aware_truncation appends its trailing marker without budgeting
+        for it, so it can return more than max_size (1001 -> 1036 at cap 1000);
+      * simple_truncation on 501-1000 chars appends "... (truncated)" without
+        truncating anything, growing the string;
+      * a 501-1000 char search result is labelled boundary_aware_truncation
+        even though _boundary_aware_truncation returns it untouched.
+    """
+    print("\n📏 Testing reduction band selection:")
+    reducer = ResultReducer()
+
+    assert reducer.reduce_result("", "search_lemma", "") == ("", "none")
+
+    for size, query_type, expected in REDUCTION_BANDS:
+        content = make_search_output(size)
+        reduced, label = reducer.reduce_result(content, query_type, "commutativity")
+
+        assert label == expected, (
+            f"{size} chars as {query_type}: expected {expected}, got {label}"
+        )
+        if expected == "none":
+            assert reduced == content, f"{size} chars must be passed through untouched"
+        print(f"  ✅ {size:5d} chars {query_type:18} -> {label:26} {len(reduced):5d} out")
+
+
+TESTS = [
+    test_coq_setup,
+    test_query_commands_return_real_results,
+    test_command_search_returns_real_content,
+    test_large_results_are_summarized,
+    test_a_search_with_no_hits_reports_no_results,
+    test_goal_context_changes_the_summary,
+    test_keyword_extraction,
+    test_goal_context_reranks_entries,
+    test_reduction_bands,
+]
 
 
 if __name__ == "__main__":
-    success = run_all_tests()
-    
-    print("\n" + "=" * 90)
-    print("🏁 CONTEXT SEARCH REDUCTION TEST SUMMARY")
+    print("🚀 Starting Context Search Tests")
     print("=" * 90)
-    
-    if success:
-        print("🎉 Context search reduction testing completed successfully!")
-        print("✅ CoqCommandSearch: Working with adaptive reduction")
-        print("✅ Result reduction strategies: Working")
-        print("   - Small results (< 500): ✅ Preserved unchanged")
-        print("   - Medium results (500-1K): ✅ Boundary-aware truncation")  
-        print("   - Large results (> 1K): ✅ Structured summarization")
-        print("✅ Context-aware ranking: Working")
-        print("✅ Size tracking and analysis: Working")
-        print("🚀 Ready for LLM integration with manageable result sizes")
-    else:
-        print("❌ Context search reduction testing failed")
-        print("🔧 Check reduction algorithm implementation")
-        print("🔧 Verify result parsing and ranking logic")
-    
-    print("\n💡 Adaptive reduction features:")
-    print("   - 📏 Size-based strategy selection")
-    print("   - 🎯 Goal context-aware relevance ranking")
-    print("   - ✂️  Boundary-aware truncation at theorem boundaries")
-    print("   - 📝 Structured summarization with categorization")
-    print("   - 📊 Comprehensive size and reduction tracking")
-    print("   - 🔍 Keyword extraction and matching")
-    print("   - 📚 Standard library preference")
-    print("   - 💾 Significant space savings for large results")
-    
-    sys.exit(0 if success else 1)
+
+    failures = []
+    try:
+        for test in TESTS:
+            try:
+                test()
+            except Exception as e:
+                failures.append((test.__name__, e))
+                print(f"❌ {test.__name__}: {e}")
+    finally:
+        close_interface()
+
+    print("\n" + "=" * 90)
+    print(f"🏁 {len(TESTS) - len(failures)}/{len(TESTS)} tests passed")
+    for name, error in failures:
+        print(f"   ❌ {name}: {error}")
+    sys.exit(1 if failures else 0)

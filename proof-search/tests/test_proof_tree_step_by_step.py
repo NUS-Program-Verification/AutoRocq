@@ -1,241 +1,248 @@
-#!/usr/bin/env python3
 """
-Test script to visualize proof tree evolution step by step.
-Uses ProofController._apply_tactic() which maintains the proof tree automatically.
+The proof tree ProofController maintains as tactics land: one node per linear
+tactic, and a branch with an open-subgoal placeholder per goal when a tactic
+splits the proof.
+
+The old version applied the same seven tactics, printed the tree after each one
+and saved a PNG, then returned True -- which pytest ignores. Its only real
+check was `raise Exception(...)` on a rejected tactic, and that was caught two
+lines later by the blanket `except Exception` that returned False. So a run in
+which every tactic was refused passed exactly like one where all seven landed.
 """
 
 import sys
 from pathlib import Path
 
-# Add project root to path
+import pytest
+
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from backend.coq_interface import CoqInterface
 from agent.context_manager import ContextManager
-from agent.proof_tree import ProofTree
 from agent.proof_controller import ProofController
+from agent.proof_tree import ProofTree
+from backend.coq_interface import CoqInterface
+from tests.test_utils import skip_if_libraries_missing, temp_example_copy
 from utils.config import ProofAgentConfig
-from tests.test_utils import reset_coq_file_to_admitted, skip_if_libraries_missing
 
-# --- CONFIGURATION ---
-coq_file = PROJECT_ROOT / "examples" / "hex2bin_assert_3.v"
 config_file = PROJECT_ROOT / "configs" / "default_config.json"
 
+# Steps 1-2 and 4-7 are linear; step 3 is the assert that splits the proof into
+# the asserted lemma and the continuation.
+TACTICS = [
+    "intros t t1 t2 a i i1 i2 a1 a2.",
+    "intros.",
+    "assert (lor_disjoint_sum: forall x y:int, 0 <= x <= 15 -> (exists k:int, y = 16 * k) -> x + y = lor x y)",
+    "{",
+    "intros x0 y [Hx0_low Hx0_up] [k Hy_eq].",
+    "subst y.",
+    "rewrite Z.mul_comm.",
+]
+BRANCHING_STEP = 3
 
-def test_proof_tree_evolution():
+
+def count_nodes(node):
+    return 0 if node is None else 1 + sum(count_nodes(c) for c in node.children)
+
+
+def test_nested_branching_does_not_duplicate_background_goals():
+    controller = ProofController.__new__(ProofController)
+    controller.logger = ProofTree().logger
+    controller.proof_tree = ProofTree()
+    controller.global_step_id = 0
+    controller.proof_tree.add_node(
+        tactic="Proof.",
+        goals_before="A /\\ B /\\ C",
+        goals_after="A /\\ B /\\ C",
+        hypotheses_before="",
+        hypotheses_after="",
+        step_number=0,
+        subgoals_after=["A /\\ B /\\ C"],
+    )
+
+    def update(before, after, tactic):
+        controller.global_step_id += 1
+        controller._update_proof_tree(
+            before, after, tactic, before[0], after[0] if after else "", "", ""
+        )
+
+    update(["A /\\ B /\\ C"], ["A", "B /\\ C"], "split.")
+    update(["A", "B /\\ C"], ["A1", "A2", "B /\\ C"], "split.")
+
+    assert len(controller.proof_tree.open_subgoals) == 3
+
+    update(["A1", "A2", "B /\\ C"], ["A2", "B /\\ C"], "exact proof_A1.")
+    update(["A2", "B /\\ C"], ["B /\\ C"], "exact proof_A2.")
+    update(["B /\\ C"], [], "exact proof_BC.")
+
+    assert controller.proof_tree.to_dict()["metadata"]["open_subgoals_count"] == 0
+
+
+@pytest.fixture(scope="module")
+def walked(tmp_path_factory):
+    """Replay the seven tactics once, recording the tree after each.
+
+    Module-scoped: loading hex2bin_assert_3.v dominates the runtime, and every
+    test below reads the same recording.
     """
-    Test proof tree visualization by applying tactics step by step
-    using ProofController._apply_tactic() which maintains the proof tree automatically.
-    """
-    
-    print("🧪 Testing Proof Tree Evolution Step by Step")
-    print("=" * 80)
-    print(f"📁 File: {coq_file}")
-    print(f"📄 Config: {config_file}")
-    print("=" * 80)
-    
-    # Create output directory for proof tree visualizations
-    output_dir = PROJECT_ROOT / "examples" / "proof_tree_debug"
-    output_dir.mkdir(exist_ok=True)
-    print(f"📁 Proof tree PNGs will be saved to: {output_dir}")
-    
-    # Clean the file first
-    print("\n🧹 Cleaning proof file...")
-    if not reset_coq_file_to_admitted(coq_file, backup=True):
-        print("❌ Failed to clean file")
-        return False
-    print("✅ File cleaned successfully")
-    
-    # Load configuration
     config = ProofAgentConfig.from_file(str(config_file))
     skip_if_libraries_missing(config)
-    print(f"✅ Loaded configuration from {config_file}")
-    
-    # Create CoqInterface
-    coq_interface = CoqInterface(
+
+    coq_file = temp_example_copy("hex2bin_assert_3.v")
+    output_dir = tmp_path_factory.mktemp("proof_tree")
+
+    coq = CoqInterface(
         file_path=str(coq_file),
         workspace=config.coq.workspace or str(coq_file.parent),
         library_paths=config.coq.library_paths,
         auto_setup_coqproject=config.coq.auto_setup_coqproject,
-        timeout=config.coq.timeout
+        timeout=config.coq.timeout,
     )
-    
+    assert coq.load(), f"load() failed: {coq.get_last_error()}"
+
     try:
-        coq_interface.load()
-        print("✅ CoqInterface loaded")
-        
-        # Create ContextManager
-        context_manager = ContextManager(
-            coq_interface=coq_interface,
-            api_key=config.llm.api_key
-        )
-        print("✅ ContextManager created")
-        
-        # Create ProofController - this maintains the proof tree
         controller = ProofController(
-            coq_interface=coq_interface,
-            context_manager=context_manager,
+            coq_interface=coq,
+            context_manager=ContextManager(
+                coq_interface=coq, api_key=config.llm.api_key
+            ),
             max_steps=100,
-            enable_recording=False
+            enable_recording=False,
+            output_dir=str(output_dir),
         )
-        print("✅ ProofController created")
-        
-        # Initialize proof controller
         controller.current_theorem_name = "hex2bin_assert_3"
         controller.step_count = 0
         controller.successful_tactics = []
-        
-        print(f"\n📋 Starting proof: {controller.current_theorem_name}")
-        print("=" * 80)
-        
-        # Initialize proof tree
         controller.proof_tree = ProofTree()
-        print("🌳 Initialized new ProofTree")
 
-        # Add initial root node to the proof tree
-        initial_goals = coq_interface.get_goal_str()
-        if not controller.proof_tree.root:
-            initial_hypotheses = coq_interface.get_hypothesis()
-            controller.proof_tree.add_node(
-                tactic="Proof.",
-                goals_before=initial_goals.strip() if initial_goals else '',
-                goals_after=initial_goals.strip() if initial_goals else '',
-                hypotheses_before=initial_hypotheses.strip() if initial_hypotheses else '',
-                hypotheses_after=initial_hypotheses.strip() if initial_hypotheses else '',
-                step_number=0,
-                subgoals_after=coq_interface.get_subgoals()
+        goals = coq.get_goal_str()
+        hypotheses = coq.get_hypothesis()
+        controller.proof_tree.add_node(
+            tactic="Proof.",
+            goals_before=goals.strip(),
+            goals_after=goals.strip(),
+            hypotheses_before=hypotheses.strip(),
+            hypotheses_after=hypotheses.strip(),
+            step_number=0,
+            subgoals_after=coq.get_subgoals(),
+        )
+
+        # step number -> (nodes, open subgoals, subgoals before, subgoals after)
+        shape = {0: (count_nodes(controller.proof_tree.root), 1, None, None)}
+
+        for step, tactic in enumerate(TACTICS, start=1):
+            subgoals_before = coq.get_subgoals()
+            goals_before = coq.get_goal_str()
+            hypotheses_before = coq.get_hypothesis()
+
+            assert controller._apply_tactic(tactic), (
+                f"step {step}, {tactic[:50]!r} failed: {coq.get_last_error()}"
             )
-        
-        # Print initial proof tree
-        print("\n" + "🌳" * 30)
-        tree_string = controller.proof_tree.get_proof_tree_string()
-        print(tree_string)
-        print("🌳" * 30)
-        
-        # Save initial proof tree PNG using save_to_png
-        png_path = str(output_dir / "proof_tree_step_0")
-        controller.proof_tree.save_to_png(png_path, prefix="")
-        print(f"💾 Saved initial proof tree PNG: {png_path}.png")
-        
-        # Define tactics to test
-        tactics = [
-            "intros t t1 t2 a i i1 i2 a1 a2.",
-            "intros.",
-            "assert (lor_disjoint_sum: forall x y:int, 0 <= x <= 15 -> (exists k:int, y = 16 * k) -> x + y = lor x y)",
-            "{",
-            "intros x0 y [Hx0_low Hx0_up] [k Hy_eq].",
-            "subst y.",
-            "rewrite Z.mul_comm.",
-        ]
-        
-        for i, tactic in enumerate(tactics, 1):
-            print(f"\n{'=' * 80}")
-            print(f"📝 Step {i}: Applying tactic")
-            print(f"   {tactic}")
-            print('=' * 80)
-            
-            # Get state before for display
-            subgoals_before = coq_interface.get_subgoals()
-            goals_before = coq_interface.get_goal_str()
-            hypotheses_before = coq_interface.get_hypothesis()
-            
-            print(f"\n📊 Before tactic:")
-            print(f"   Subgoals count: {len(subgoals_before)}")
-            
-            # USE ProofController._apply_tactic()
-            success = controller._apply_tactic(tactic)
-            
-            if not success:
-                error = coq_interface.get_last_error()
-                raise Exception(f"\n❌ Tactic failed: {error}")
-            
-            # Get state after for display
-            subgoals_after = coq_interface.get_subgoals()
-            goals_after = coq_interface.get_goal_str()
-            hypotheses_after = coq_interface.get_hypothesis()
-            
-            print(f"\n✅ Tactic applied successfully!")
-            print(f"📊 After tactic:")
-            print(f"   Subgoals count: {len(subgoals_after)}")
-            print(f"   Change: {len(subgoals_before)} → {len(subgoals_after)}")
-            
-            # Set global step id for the proof tree
-            controller.global_step_id = i
-            # _handle_successful_tactic updates proof tree
-            tactic_with_state = controller._handle_successful_tactic(
+
+            subgoals_after = coq.get_subgoals()
+            controller.global_step_id = step
+            controller._handle_successful_tactic(
                 tactic,
                 subgoals_before,
                 subgoals_after,
                 goals_before,
-                goals_after,
+                coq.get_goal_str(),
                 hypotheses_before,
-                hypotheses_after
+                coq.get_hypothesis(),
             )
-            
-            # Print the proof tree using get_proof_tree_string()
-            print("\n" + "🌳" * 30)
-            tree_string = controller.proof_tree.get_proof_tree_string()
-            print(tree_string)
-            print("🌳" * 30)
-            
-            # Save proof tree PNG using save_to_png
-            png_path = str(output_dir / f"proof_tree_step_{i}")
-            controller.proof_tree.save_to_png(png_path, prefix="")
-            print(f"\n💾 Saved proof tree PNG: {png_path}.png")
-        
-        # Print final statistics
-        print("\n" + "=" * 80)
-        print("📊 Final Proof Tree Statistics:")
-        print("=" * 80)
-        tree_dict = controller.proof_tree.to_dict()
-        if 'metadata' in tree_dict:
-            metadata = tree_dict['metadata']
-            print(f"   Open subgoals: {metadata.get('open_subgoals_count', 0)}")
-            print(f"   Total steps applied: {controller.step_count}")
-        
-        # Print final full tree
-        print("\n" + "=" * 80)
-        print("🌳 FINAL PROOF TREE:")
-        print("=" * 80)
-        final_tree = controller.proof_tree.get_proof_tree_string()
-        print(final_tree)
-        
-        # Save final proof tree PNG
-        final_png_path = str(output_dir / "proof_tree_final")
-        controller.proof_tree.save_to_png(final_png_path, prefix="hex2bin_assert_3_")
-        print(f"\n💾 Saved final proof tree PNG: {final_png_path}.png")
-        
-        print("\n🎉 Test completed successfully!")
-        return True
-        
-    except Exception as e:
-        print(f"\n❌ Test failed with exception: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-        
+            shape[step] = (
+                count_nodes(controller.proof_tree.root),
+                len(controller.proof_tree.open_subgoals),
+                len(subgoals_before),
+                len(subgoals_after),
+            )
+
+        yield controller, shape, output_dir
     finally:
-        coq_interface.close()
-        print("\n✅ CoqInterface closed")
+        coq.close()
 
 
-if __name__ == "__main__":
-    print("🚀 Proof Tree Step-by-Step Visualization Test")
-    print("   Using ProofController._apply_tactic() to maintain proof tree")
-    print("=" * 80)
-    
-    success = test_proof_tree_evolution()
-    
-    print("\n" + "=" * 80)
-    if success:
-        print("🎉 TEST PASSED!")
-        print("✅ Examined all tactics successfully")
-        print("✅ Proof tree maintained automatically by ProofController._apply_tactic()")
-        print("✅ Check examples/proof_tree_debug/ for PNG visualizations")
-    else:
-        print("❌ TEST FAILED!")
-    
-    print("=" * 80)
-    
-    sys.exit(0 if success else 1)
+def test_the_root_is_the_proof_step(walked):
+    controller, shape, _ = walked
+
+    assert controller.proof_tree.root is not None
+    assert controller.proof_tree.root.tactic == "Proof."
+    assert controller.proof_tree.root.step_number == 0
+    assert shape[0][0] == 1, "the tree started with more than a root"
+
+
+def test_every_tactic_was_recorded_in_order(walked):
+    controller, _, _ = walked
+
+    assert controller.successful_tactics == TACTICS
+    assert controller.failed_tactics == []
+
+
+def test_a_linear_tactic_adds_exactly_one_node(walked):
+    _, shape, _ = walked
+
+    for step in range(1, len(TACTICS) + 1):
+        if step == BRANCHING_STEP:
+            continue
+        nodes_before = shape[step - 1][0]
+        nodes_after = shape[step][0]
+        assert nodes_after == nodes_before + 1, (
+            f"step {step} ({TACTICS[step - 1][:40]!r}) added "
+            f"{nodes_after - nodes_before} nodes"
+        )
+
+
+def test_the_branching_tactic_opens_a_placeholder_per_subgoal(walked):
+    """`assert` splits the goal, and the tree has to show both branches."""
+    _, shape, _ = walked
+
+    nodes_before, open_before, _, _ = shape[BRANCHING_STEP - 1]
+    nodes_after, open_after, subgoals_before, subgoals_after = shape[BRANCHING_STEP]
+
+    assert (subgoals_before, subgoals_after) == (1, 2), (
+        "the assert did not actually split the goal"
+    )
+    assert open_before == 1 and open_after == 2, (
+        f"open subgoals went {open_before} -> {open_after}"
+    )
+    # The tactic node itself plus one placeholder for each of the two subgoals.
+    assert nodes_after == nodes_before + 3, (
+        f"branching added {nodes_after - nodes_before} nodes, expected 3"
+    )
+
+
+def test_the_rendered_tree_shows_the_script_and_the_open_branch(walked):
+    controller, _, _ = walked
+    rendered = controller.proof_tree.get_proof_tree_string()
+
+    for tactic in TACTICS:
+        assert tactic[:40] in rendered, f"{tactic[:40]!r} missing from the tree"
+
+    assert "[Subgoal 1/2]" in rendered, rendered[:400]
+    assert "[OPEN]" in rendered
+    assert rendered.count("[APPLIED]") == len(TACTICS) + 1
+
+
+def test_to_dict_reports_the_open_subgoals(walked):
+    controller, _, _ = walked
+    tree = controller.proof_tree.to_dict()
+
+    assert tree["root"]["tactic"] == "Proof."
+    assert tree["metadata"]["open_subgoals_count"] == 2
+    assert tree["metadata"]["active_subgoal"] == TACTICS[-1]
+
+    # The dict has to mirror the tree, not a summary of it.
+    def count_dict(node):
+        return 1 + sum(count_dict(c) for c in node["children"])
+
+    assert count_dict(tree["root"]) == count_nodes(controller.proof_tree.root)
+
+
+def test_the_tree_can_be_written_out_as_a_png(walked):
+    controller, _, output_dir = walked
+
+    controller.proof_tree.save_to_png(str(output_dir / "proof_tree_final"), prefix="run_")
+
+    png = output_dir / "run_proof_tree_final.png"
+    assert png.exists(), sorted(p.name for p in output_dir.iterdir())
+    assert png.stat().st_size > 0

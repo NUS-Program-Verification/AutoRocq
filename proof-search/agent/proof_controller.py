@@ -29,6 +29,7 @@ class ProofController:
         max_context_search: int = 3,
         history_file: str = "tactic_history.json",
         recording_output_dir: str = "data/statistics",
+        output_dir: Optional[str] = None,
         interactive: Optional[InteractiveConfig] = None
     ):
         
@@ -45,6 +46,11 @@ class ProofController:
         self.coq = coq_interface
         self.context_manager = context_manager
         self.coq_chat_session = context_manager.chat_session
+
+        # The run's output directory: where the proof tree is saved, beside the
+        # log and the resulting .v. None when the caller has no run directory,
+        # in which case the tree falls back to the proof file's own directory.
+        self.output_dir = output_dir
         
         self.is_successful = False
         self.give_up = False
@@ -59,7 +65,7 @@ class ProofController:
 
         # Initialize counters and history
         self.global_step_id = 0         # Global ID for tool call / proof step
-        self.gen_step_count = 0         # Global step count for tactic / HL / rollback
+        self.step_count = 0         # Steps spent: tactic / HL / rollback
         self.successful_tactics = []    # Global successful tactics
         self.failed_tactics = []        # Global failed tactics
         self.query_commands = []        # Global query commands
@@ -227,7 +233,8 @@ class ProofController:
                 self.recorder.start_proof_recording(
                     proof_file=proof_file,
                     theorem_name=self.current_theorem_name,
-                    metadata={'max_steps': self.max_steps, 'controller_version': '1.0'}
+                    metadata={'max_steps': self.max_steps, 'controller_version': '1.0'},
+                    proof_file_path=self.coq.source_path
                 )
             except Exception as e:
                 self.logger.error(f"❌ Failed to start proof recording: {e}")
@@ -236,7 +243,7 @@ class ProofController:
         self.is_successful = False
         self.give_up = False
         self.global_step_id = 0
-        self.gen_step_count = 0
+        self.step_count = 0
         self.successful_tactics = []
         self.failed_tactics = []
         self.query_commands = []
@@ -262,12 +269,13 @@ class ProofController:
         Finalize a proof attempt: record history, save tree, end recording.
         Called by prove_theorem() and InteractiveSessionManager.
         """
-        proof_file_dir = str(Path(self.coq.file_path).parent)
+        tree_dir = Path(self.output_dir) if self.output_dir else Path(self.coq.file_path).parent
+        tree_dir.mkdir(parents=True, exist_ok=True)
         prefix = self.current_theorem_name + "_"
 
         completion_message = (
             "Proof completed" if self.is_successful
-            else "Max steps reached" if self.gen_step_count >= self.max_steps
+            else "Max steps reached" if self.step_count >= self.max_steps
             else "Proof aborted" if self.give_up
             else "Unable to proceed"
         )
@@ -276,8 +284,8 @@ class ProofController:
             self.logger.info(f"🔍 Recording successful proof with {len(tactics_with_states)} tactics")
             self._record_successful_proof(tactics_with_states)
 
-        self.proof_tree.save_to_png(str(Path(proof_file_dir) / "proof_tree_final"), prefix=prefix)
-        self.proof_tree.save_to_json(str(Path(proof_file_dir) / "proof_tree_final.json"), prefix=prefix)
+        self.proof_tree.save_to_png(str(tree_dir / "proof_tree_final"), prefix=prefix)
+        self.proof_tree.save_to_json(str(tree_dir / "proof_tree_final.json"), prefix=prefix)
 
         if self.enable_recording and self.recorder:
             try:
@@ -289,7 +297,7 @@ class ProofController:
                         'failed_tactics': len(self.failed_tactics),
                         'query_commands': len(self.query_commands),
                         'steps_taken': self.global_step_id,
-                        'steps_to_completion': self.gen_step_count if self.is_successful else None,
+                        'steps_to_completion': self.step_count if self.is_successful else None,
                         'successful_tactics_list': self.successful_tactics,
                         'query_commands_list': self.query_commands,
                     }
@@ -353,10 +361,10 @@ class ProofController:
         proof_tree_str = self.proof_tree.get_proof_tree_string()
         prompt = self.context_manager.build_initial_prompt(proof_tree_str)
 
-        while self.gen_step_count < self.max_steps:
+        while self.step_count < self.max_steps:
             if self.global_step_id > self.max_steps * (self.max_context_search + 1):
-                self.gen_step_count = self.max_steps  # so that proof completion message is "Max steps reached"
-                self.logger.info(f"\n{'='*60}\n📊 [PROOF STEP {self.global_step_id}] {self.gen_step_count}/{self.max_steps}. Exiting...")
+                self.step_count = self.max_steps  # so that proof completion message is "Max steps reached"
+                self.logger.info(f"\n{'='*60}\n📊 [PROOF STEP {self.global_step_id}] {self.step_count}/{self.max_steps}. Exiting...")
                 break
 
             # Inject pending user hints
@@ -367,7 +375,7 @@ class ProofController:
 
             self.steps_since_restart += 1
             self.global_step_id += 1
-            self.logger.info(f"\n{'='*60}\n📊 [PROOF STEP {self.global_step_id}] {self.gen_step_count}/{self.max_steps}\n{'='*60}")
+            self.logger.info(f"\n{'='*60}\n📊 [PROOF STEP {self.global_step_id}] {self.step_count}/{self.max_steps}\n{'='*60}")
 
             proof_state = self._build_proof_state()
 
@@ -431,7 +439,7 @@ class ProofController:
                 rollback_data = decision_content
                 rollback_reason = rollback_data.get('reason', 'No reason provided')
                 rollback_steps = rollback_data.get('steps', 1)
-                self.gen_step_count += 1
+                self.step_count += 1
                 self.logger.info(f"🔄 Step {self.global_step_id}: ROLLBACK {rollback_steps} step{'s' if rollback_steps != 1 else ''}: {rollback_reason}")
 
                 agent_only = [t for t in self._tactics_with_states if t.get('source') != 'user']
@@ -467,7 +475,7 @@ class ProofController:
                 continue
 
             elif decision_type == 'tactic':
-                self.gen_step_count += 1
+                self.step_count += 1
                 tactic_content = self.context_manager.get_tactic(decision_content, tool_call_id)
 
                 if tactic_content.startswith(("Search", "Print", "Check", "About")):
@@ -475,7 +483,7 @@ class ProofController:
                     prompt += self.context_manager.handle_query_call(decision_content, tool_call_id)
                     self.logger.info(f"⚠️  Step {self.global_step_id}: QUERY AS TACTIC!")
                     self.query_commands.append(decision_content)
-                    self.gen_step_count -= 1
+                    self.step_count -= 1
                     consecutive_queries += 1
                     consecutive_errors += 1
                     continue
@@ -552,6 +560,13 @@ class ProofController:
                 self._tactics_with_states.append(tactic_with_state)
 
                 post_tactic_status = self.coq.get_proof_completion_status()
+                if post_tactic_status['ready_for_qed'] and not post_tactic_status['qed_already_applied']:
+                    # Asking for status no longer closes the proof; do it here.
+                    # Rocq can still refuse Qed on a goal-free proof (unresolved
+                    # evars, guard condition), and then nothing was kept and the
+                    # status we already have still describes the proof.
+                    if self.coq.apply_qed():
+                        post_tactic_status = self.coq.get_proof_completion_status()
                 proof_complete = post_tactic_status['is_complete'] and post_tactic_status['qed_already_applied']
 
                 self.logger.info(f"✅ Step {self.global_step_id}: TACTIC APPLIED SUCCESSFULLY!")
@@ -669,6 +684,13 @@ class ProofController:
             if creates_branching:
                 if self.proof_tree.open_subgoals:
                     self.logger.debug(f"🌳 Branching tactic detected: {len(subgoals_before)} -> {len(subgoals_after)} subgoals")
+                    # CoqPyt returns every goal after the tactic, including
+                    # background goals that were already open. Only the prefix
+                    # replacing the focused goal is new.
+                    new_subgoal_count = (
+                        len(subgoals_after) - len(subgoals_before) + 1
+                    )
+                    new_subgoals = subgoals_after[:new_subgoal_count]
                     # Add branching node with intermediate subgoal nodes
                     node = self.proof_tree.add_branching_node(
                         tactic=successful_tactic,
@@ -677,9 +699,9 @@ class ProofController:
                         hypotheses_before=hypotheses_before,
                         hypotheses_after=hypotheses_after.strip() if hypotheses_after else '',
                         step_number=self.global_step_id,
-                        subgoals=subgoals_after
+                        subgoals=new_subgoals
                     )
-                    self.logger.debug(f"🌳 Added branching node: {len(subgoals_after)} subgoals created")
+                    self.logger.debug(f"🌳 Added branching node: {len(new_subgoals)} subgoals created")
                 else:
                     self.logger.warning(f"⚠️  No open subgoals to attach branching tactic [{successful_tactic}] to. Skipping node addition.")
 

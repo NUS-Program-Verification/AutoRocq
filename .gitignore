@@ -20,6 +20,7 @@ out*/
 .vscode/
 .cursor/
 .claude/
+.codex/
 AGENT.md
 AGENTS.md
 CLAUDE.md
@@ -38,3 +39,4 @@ proof-search/examples/*.png
 proof-search/examples/coqpyt_aux_*
 proof-search/configs/local.json
 
+*_autorocq_*.v
