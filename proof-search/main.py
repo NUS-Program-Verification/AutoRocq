@@ -210,8 +210,7 @@ def initialize_components(args, config: ProofAgentConfig, logger) -> Dict[str, A
             timeout=getattr(config.coq, 'timeout', 60)
         )
         
-        # Everything below edits the file, so it has to come after the
-        # constructor -- that is what puts the scratch copy in place.
+        # In-file edits should live in the scratch copy.
         scratch_file = coq_interface.file_path
 
         if config.enable_hammer:
@@ -540,12 +539,6 @@ def clean_proof_file(file_path: str, logger) -> bool:
             new_content = content[:proof_start_pos] + "\nAdmitted."
             ending_change = "(incomplete) -> Admitted."
         
-        # Create backup first
-        backup_path = file_path + '.backup'
-        with open(backup_path, 'w', encoding='utf-8') as f:
-            f.write(content)
-        logger.info(f"💾 Created backup: {backup_path}")
-        
         # Write the cleaned content
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(new_content)
@@ -588,10 +581,10 @@ def main():
         sig_name = signal.Signals(signum).name
         print(f"\n⚠️ Received {sig_name} signal - initiating cleanup...")
         
+        _harvest_proof(components, output_dir, logger)
+
         if components and logger:
             cleanup_components(components, logger)
-        
-        _harvest_proof(components, output_dir, logger)
 
         sys.exit(128 + signum)
     
@@ -799,10 +792,9 @@ def main():
         except Exception as e:
             logger.warning(f"Could not retrieve token statistics: {e}")
         
-        cleanup_components(components, logger)
-        
-        # Coq session is closed, so the scratch copy is safe to harvest.
         _harvest_proof(components, output_dir, logger)
+
+        cleanup_components(components, logger)
         
     sys.exit(exit_code)
 

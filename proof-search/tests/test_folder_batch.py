@@ -136,6 +136,8 @@ def prove_single_file(
                 return success
             
             finally:
+                if results_dir is not None:
+                    coq_interface.save_result(results_dir, result_name)
                 coq_interface.close()
         
         except Exception as e:
@@ -155,10 +157,6 @@ def prove_single_file(
                 # Re-raise non-crash errors
                 raise e
         
-        finally:
-            if coq_interface is not None and results_dir is not None:
-                coq_interface.save_result(results_dir, result_name)
-    
     return False
 
 @pytest.mark.llm

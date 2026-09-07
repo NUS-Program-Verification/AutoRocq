@@ -1,18 +1,5 @@
 #!/usr/bin/env python3
-"""Give a proof attempt a private copy of the .v file to work on.
-
-The agent proves in place: it strips the existing tactics from the file, and
-coqpyt writes every accepted tactic straight back to disk. Pointed at a source
-file, a run therefore destroys that file -- the original proof is gone and the
-working tree is dirty. A single benchmark run rewrites every .v in
-AutoRocq-bench this way.
-
-ScratchProof hands the agent a throwaway copy instead. The copy lives beside
-the original so the workspace still resolves exactly as before (same
-_CoqProject, sibling modules and library paths), and the finished proof is
-saved into the run's output directory, where it stays available for
-independent re-checking instead of being overwritten by the next run.
-"""
+"""Run a proof attempt on a temporary copy of its source file."""
 
 import re
 import shutil
@@ -20,8 +7,8 @@ import uuid
 from pathlib import Path
 from typing import Optional, Union
 
-# Artifacts Coq leaves beside a .v file; they belong to the scratch copy.
-_BUILD_SUFFIXES = (".vo", ".vok", ".vos", ".glob", ".aux")
+# Artifacts Rocq leaves beside a .v file; they belong to the scratch copy.
+_BUILD_SUFFIXES = (".vo", ".vok", ".vos", ".glob")
 
 
 def _module_safe(stem: str) -> str:
@@ -66,9 +53,10 @@ class ScratchProof:
         dest_dir.mkdir(parents=True, exist_ok=True)
 
         dest = dest_dir / (name or self.source.name)
+        stem, suffix = dest.stem, dest.suffix
         counter = 1
         while dest.exists():
-            dest = dest.with_name(f"{dest.stem}.{counter}{dest.suffix}")
+            dest = dest.with_name(f"{stem}.{counter}{suffix}")
             counter += 1
 
         shutil.copyfile(self.path, dest)
@@ -77,7 +65,7 @@ class ScratchProof:
 
     def close(self) -> None:
         """Remove the scratch copy and undo the run's edits to the source tree."""
-        litter = [self.path, self.path.with_suffix(".v.backup")]
+        litter = [self.path, self.path.with_name(f".{self.path.stem}.aux")]
         litter += [self.path.with_suffix(suffix) for suffix in _BUILD_SUFFIXES]
 
         for path in litter:

@@ -35,22 +35,14 @@ class CoqInterface:
         - auto_setup_coqproject: Whether to automatically create/update _CoqProject
         - coqproject_extra_options: Additional options for _CoqProject
 
-        There is no read-only mode: load() alone pops the trailing "Admitted.",
-        clear_all_proof_scripts() rewrites the file, and coqpyt writes every
-        accepted tactic straight to disk. So file_path is never touched -- it is
-        the source, and all work happens on a copy beside it. source_path names
-        the original for anything that reports or records a proof; file_path is
-        the copy the agent actually edits. Call save_result() for the outcome.
         """
-        self.source_path = os.path.abspath(file_path)
         self.logger = setup_logger("CoqInterface")
 
         self._scratch = ScratchProof(file_path, self.logger)
+        self.source_path = str(self._scratch.source)
         self.file_path = str(self._scratch.open())
-        # Not in close(): load() calls close() to tear down the previous coq-lsp
-        # session and would delete the file out from under itself.
-        # ScratchProof.close() only unlinks files, so it is safe at exit.
-        atexit.register(self._scratch.close)
+        self._scratch_cleanup = self._scratch.close
+        atexit.register(self._scratch_cleanup)
         if workspace is not None and not os.path.isabs(workspace):
             workspace = os.path.abspath(workspace)
         self.workspace = workspace
@@ -144,7 +136,7 @@ class CoqInterface:
     def load(self):
         """Open the Coq file, run it, and set up for proof replay."""
         try:
-            self.close()
+            self._close_session()
             self._invalidate_cached_goal_state()
             self.logger.info(f"Loading Coq file: {self.file_path}")
             
@@ -182,7 +174,7 @@ class CoqInterface:
             return True
             
         except Exception as e:
-            self.close()
+            self._close_session()
             self.last_error = f"Failed to load file: {str(e)}"
             self.logger.error(self.last_error)
             return False
@@ -912,7 +904,7 @@ class CoqInterface:
                 return False
             
             # Step 2: Reload the file with the cleared scripts
-            self.close()  # Close current session
+            self._close_session()
             
             if not self.load():  # Reload with cleared scripts
                 self.logger.error("Failed to reload file after clearing scripts")
@@ -937,12 +929,6 @@ class CoqInterface:
             # Read the original file
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
-            
-            # Create backup
-            backup_path = file_path.with_suffix('.v.backup')
-            with open(backup_path, 'w', encoding='utf-8') as f:
-                f.write(content)
-            self.logger.debug(f"Created backup at {backup_path}")
             
             lines = content.split('\n')
             output = []
@@ -980,8 +966,8 @@ class CoqInterface:
             self.logger.error(self.last_error)
             return False
 
-    def close(self):
-        """Close the Coq interface and clean up resources."""
+    def _close_session(self):
+        """Close the current coq-lsp session without removing the scratch file."""
         try:
             if hasattr(self, 'proof_file') and self.proof_file:
                 try:
@@ -1002,6 +988,14 @@ class CoqInterface:
         except Exception as e:
             self.logger.warning(f"Error during CoqInterface close: {e}")
             # Don't raise - just log and continue
+
+    def close(self):
+        """Close the session and remove the scratch file."""
+        try:
+            self._close_session()
+        finally:
+            atexit.unregister(self._scratch_cleanup)
+            self._scratch_cleanup()
     
     def save_result(self, dest_dir, name: Optional[str] = None):
         """Copy the proof the agent produced into dest_dir. Returns the path."""
