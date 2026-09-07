@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from backend.coq_interface import CoqInterface
 from utils.logger import setup_logger
+from tests.test_utils import temp_example_copy
 
 def test_three_tactics():
     """Test if simpl., simpl., reflexivity. can prove the goal."""
@@ -20,7 +21,7 @@ def test_three_tactics():
     logger = setup_logger("test", level="INFO", console_output=True)
     
     # File path relative to project root
-    file_path = str(Path(__file__).parent.parent / "examples" / "example.v")
+    file_path = str(temp_example_copy("example.v"))
     
     try:
         # Load the Coq file

@@ -6,12 +6,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from backend.coq_interface import CoqInterface
+from tests.test_utils import temp_example_copy
 
 
 if __name__ == "__main__":
     # Use absolute path relative to the script location
-    script_dir = Path(__file__).parent
-    file_path = script_dir.parent / "examples" / "example.v"
+    file_path = temp_example_copy("example.v")
     
     if not file_path.exists():
         print(f"Error: Example file not found at {file_path}")

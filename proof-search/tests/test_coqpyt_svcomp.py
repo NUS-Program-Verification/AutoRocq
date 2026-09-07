@@ -8,9 +8,10 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from coqpyt.coq.proof_file import ProofFile
 from coqpyt.coq.exceptions import InvalidChangeException
+from tests.test_utils import temp_example_copy
 
 # --- CONFIGURATION ---
-coq_file = PROJECT_ROOT / "examples" / "main_loop_invariant_2_established_Coq.v"
+coq_file = temp_example_copy("main_loop_invariant_2_established_Coq.v")
 
 def print_current_goals(proof_file):
     """Print current goals from the proof file"""
@@ -33,7 +34,7 @@ def print_steps(proof):
 
 def test_proof_with_correct_tactics():
     """Test applying the correct proof tactics step by step"""
-    examples_dir = PROJECT_ROOT / "examples"
+    examples_dir = coq_file.parent
     
     print("🔍 Testing proof with correct tactics...")
     

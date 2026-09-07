@@ -12,9 +12,10 @@ from backend.coq_interface import CoqInterface
 from agent.context_manager import ContextManager
 from utils.config import ProofAgentConfig
 from utils.coq_utils import find_transitive_dependencies
+from tests.test_utils import temp_example_copy
 
 # --- CONFIGURATION ---
-coq_file = PROJECT_ROOT / "examples" / "example.v"
+coq_file = temp_example_copy("example.v")
 config_file = PROJECT_ROOT / "configs" / "default_config.json"
 
 

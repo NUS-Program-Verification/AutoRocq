@@ -7,13 +7,17 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from coqpyt.coq.proof_file import ProofFile
 from coqpyt.coq.exceptions import InvalidChangeException
-from tests.test_utils import reset_coq_file_to_admitted, restore_coq_file_from_backup, get_example_file
+from tests.test_utils import reset_coq_file_to_admitted, restore_coq_file_from_backup, temp_example_copy
 
 
 def test_simple_tactics():
     """Simple test focusing on proof states using context manager for proper cleanup."""
     
-    file_path = get_example_file()
+    # Work on a throwaway copy: this test rewrites the file to "Proof. Admitted."
+    # and coqpyt then writes every appended tactic back to it, so pointing it at
+    # the tracked example leaves the working tree dirty whenever the restore in
+    # the finally: below is skipped (SIGKILL, CI timeout, OOM).
+    file_path = temp_example_copy("example.v")
     print(f"Loading file: {file_path}")
     
     # Reset the file to have an unproven proof (Proof. Admitted.)
