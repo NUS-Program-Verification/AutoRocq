@@ -1,12 +1,4 @@
-"""
-Exercises CoqInterface.search() against a real coq-lsp session: every query
-command type, plus the success/failure contract.
-
-search() encodes its failures as ordinary strings, so counting "a string came
-back" is what let this file report 23/23 successes while its interface had
-failed to load and every answer was the words "aux_file not accessible". This
-asserts on the *content* each query returns instead.
-"""
+"""Test raw Rocq query commands through CoqInterface.search()."""
 
 import sys
 from pathlib import Path
@@ -17,7 +9,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import pytest
 
 from backend.coq_interface import CoqInterface
-from tests.test_utils import temp_example_copy
+from tests.test_utils import skip_if_libraries_missing, temp_example_copy
 from utils.config import ProofAgentConfig
 
 coq_file = temp_example_copy("main_loop_invariant_2_established_Coq.v")
@@ -64,15 +56,11 @@ _interface = None
 
 
 def get_interface():
-    """One coq-lsp session shared by every test here; queries do not mutate state.
-
-    The workspace and library_paths are not optional: without the libframac
-    mapping the goal file's statement does not typecheck, no proof is opened,
-    and load() dies in coqpyt with "pop from empty list".
-    """
+    """Return the shared query session, creating it on first use."""
     global _interface
     if _interface is None:
         config = ProofAgentConfig.from_file(str(config_file))
+        skip_if_libraries_missing(config)
         coq = CoqInterface(
             file_path=str(coq_file),
             workspace=config.coq.workspace or str(coq_file.parent),

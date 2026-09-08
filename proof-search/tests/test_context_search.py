@@ -1,20 +1,4 @@
-"""
-Test script for Context Search Module with Adaptive Result Reduction
-Tests full Coq command search functionality: Search/Print/Check/About/Locate/Print Assumptions
-with adaptive size reduction strategies.
-
-Two levels, deliberately kept apart:
-
-* The query tests run against a real coq-lsp session with the libframac
-  realizations on the load path, and assert on the *content* that comes back.
-  That is what proves context search reaches Rocq and can see the library.
-* The ranking and reduction tests call ResultReducer directly with synthetic
-  input. Which
-  size band a live query lands in is decided purely by len(content), and real
-  output sits close enough to the boundaries that library or Rocq churn would
-  silently move it -- Search to_sint32. is 503 characters against a 500-char
-  boundary. Driving the reducer directly pins every band deterministically.
-"""
+"""Test live Rocq searches and deterministic result reduction."""
 
 import sys
 from pathlib import Path
@@ -27,7 +11,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from agent.context_search import CoqCommandSearch, ResultReducer
 from backend.coq_interface import CoqInterface
-from tests.test_utils import temp_example_copy
+from tests.test_utils import skip_if_libraries_missing, temp_example_copy
 from utils.config import ProofAgentConfig
 
 # Work on a throwaway copy: CoqInterface.load() pops the trailing "Admitted."
@@ -36,11 +20,8 @@ from utils.config import ProofAgentConfig
 coq_file = temp_example_copy("main_loop_invariant_2_established_Coq.v")
 config_file = PROJECT_ROOT / "configs" / "default_config.json"
 
-# query -> fragments the result must contain. Substrings, never sizes or exact
-# text: Rocq renders the same term differently depending on which notations are
-# in scope (nat -> nat vs nat → nat under Utf8), and sizes drift with the
-# stdlib. "Abs.Abs_pos" comes from libautorocq/int/Abs.v, so it fails if the
-# libframac mapping is not actually on the load path.
+# Query -> stable fragments expected in the result. Abs.Abs_pos checks that the
+# configured benchmark library is on the Rocq load path.
 QUERY_EXPECTATIONS = [
     ("Search Z.abs.", ["Z.abs_0: Z.abs 0 = 0", "Abs.Abs_pos"]),
     ("Search to_sint32.", ["is_to_sint32", "id_sint32"]),
@@ -97,7 +78,9 @@ REDUCTION_BANDS = [
 
 
 def load_config():
-    return ProofAgentConfig.from_file(str(config_file))
+    config = ProofAgentConfig.from_file(str(config_file))
+    skip_if_libraries_missing(config)
+    return config
 
 
 # CoqInterface.search() never raises -- it returns its failures as ordinary
@@ -125,18 +108,7 @@ _interface = None
 
 
 def get_interface():
-    """One coq-lsp session, shared by every live test.
-
-    Starting coq-lsp and replaying the goal file costs most of the runtime, and
-    none of the live tests changes the proof state -- they only issue queries --
-    so one session serves all of them. Torn down explicitly by the fixture
-    below (or by __main__): closing it from an atexit hook instead deadlocks,
-    because coqpyt's LSP client shuts its threads down during interpreter exit.
-
-    The workspace and library_paths are not optional: without the libframac
-    mapping the goal file's statement does not typecheck, no proof is opened,
-    and load() dies in coqpyt with "pop from empty list".
-    """
+    """Return the shared query session, creating it on first use."""
     global _interface
     if _interface is None:
         config = load_config()
