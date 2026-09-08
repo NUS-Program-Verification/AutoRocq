@@ -1,5 +1,6 @@
 # backend/coq_interface.py
 
+import atexit
 import os
 import re
 import signal
@@ -10,6 +11,7 @@ from coqpyt.coq.structs import TermType
 from pathlib import Path
 from contextlib import contextmanager
 from utils.logger import setup_logger, clean_ansi_codes
+from utils.scratch import ScratchProof
 
 
 class CoqSessionDesync(RuntimeError):
@@ -32,8 +34,15 @@ class CoqInterface:
         - library_paths: List of library mappings [{"path": "/path", "name": "libname"}, ...]
         - auto_setup_coqproject: Whether to automatically create/update _CoqProject
         - coqproject_extra_options: Additional options for _CoqProject
+
         """
-        self.file_path = os.path.abspath(file_path)
+        self.logger = setup_logger("CoqInterface")
+
+        self._scratch = ScratchProof(file_path, self.logger)
+        self.source_path = str(self._scratch.source)
+        self.file_path = str(self._scratch.open())
+        self._scratch_cleanup = self._scratch.close
+        atexit.register(self._scratch_cleanup)
         if workspace is not None and not os.path.isabs(workspace):
             workspace = os.path.abspath(workspace)
         self.workspace = workspace
@@ -47,7 +56,6 @@ class CoqInterface:
         self.proof_file = None
         self.proof = None
         self.last_error = None
-        self.logger = setup_logger("CoqInterface")
 
         # Cache for recent goal queries so we avoid back-to-back LSP `proof_goals` calls
         # when the proof state hasn't changed.
@@ -128,7 +136,7 @@ class CoqInterface:
     def load(self):
         """Open the Coq file, run it, and set up for proof replay."""
         try:
-            self.close()
+            self._close_session()
             self._invalidate_cached_goal_state()
             self.logger.info(f"Loading Coq file: {self.file_path}")
             
@@ -166,7 +174,7 @@ class CoqInterface:
             return True
             
         except Exception as e:
-            self.close()
+            self._close_session()
             self.last_error = f"Failed to load file: {str(e)}"
             self.logger.error(self.last_error)
             return False
@@ -896,7 +904,7 @@ class CoqInterface:
                 return False
             
             # Step 2: Reload the file with the cleared scripts
-            self.close()  # Close current session
+            self._close_session()
             
             if not self.load():  # Reload with cleared scripts
                 self.logger.error("Failed to reload file after clearing scripts")
@@ -921,12 +929,6 @@ class CoqInterface:
             # Read the original file
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
-            
-            # Create backup
-            backup_path = file_path.with_suffix('.v.backup')
-            with open(backup_path, 'w', encoding='utf-8') as f:
-                f.write(content)
-            self.logger.debug(f"Created backup at {backup_path}")
             
             lines = content.split('\n')
             output = []
@@ -964,8 +966,8 @@ class CoqInterface:
             self.logger.error(self.last_error)
             return False
 
-    def close(self):
-        """Close the Coq interface and clean up resources."""
+    def _close_session(self):
+        """Close the current coq-lsp session without removing the scratch file."""
         try:
             if hasattr(self, 'proof_file') and self.proof_file:
                 try:
@@ -986,7 +988,19 @@ class CoqInterface:
         except Exception as e:
             self.logger.warning(f"Error during CoqInterface close: {e}")
             # Don't raise - just log and continue
+
+    def close(self):
+        """Close the session and remove the scratch file."""
+        try:
+            self._close_session()
+        finally:
+            atexit.unregister(self._scratch_cleanup)
+            self._scratch_cleanup()
     
+    def save_result(self, dest_dir, name: Optional[str] = None):
+        """Copy the proof the agent produced into dest_dir. Returns the path."""
+        return self._scratch.save(dest_dir, name)
+
     def force_close(self):
         try:
             self.logger.info("Forcing coq-lsp shutdown...")

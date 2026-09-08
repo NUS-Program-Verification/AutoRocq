@@ -76,7 +76,8 @@ class ProofRecorder:
             # Don't clear existing records on error - keep what we have
             pass
 
-    def start_proof_recording(self, proof_file: ProofFile, theorem_name: str = None, metadata: Dict[str, Any] = None):
+    def start_proof_recording(self, proof_file: ProofFile, theorem_name: str = None, metadata: Dict[str, Any] = None,
+                              proof_file_path: str = None):
         """
         Start recording a new proof attempt.
         
@@ -84,6 +85,9 @@ class ProofRecorder:
             proof_file: Path to the proof file
             theorem_name: Name of the theorem being proved
             metadata: Additional metadata to record
+            proof_file_path: Name to record instead of proof_file.path. Proofs run
+                on a scratch copy with a generated name; records are grouped by
+                file, so they must carry the original path.
         """
         try:
             # End any active recording first
@@ -95,8 +99,8 @@ class ProofRecorder:
          
             self.active_proof = {
                 'session_id': self.current_session_id,
-                'proof_file': proof_file.path,
-                'proof_file_full_path': proof_file.path,
+                'proof_file': proof_file_path or proof_file.path,
+                'proof_file_full_path': proof_file_path or proof_file.path,
                 'theorem_name': theorem_name or 'unnamed',
                 'start_time': datetime.now().isoformat(),
                 'metadata': metadata or {},
