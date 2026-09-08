@@ -236,7 +236,6 @@ if __name__ == "__main__":
         print("🎉 TEST PASSED!")
         print("✅ Examined all tactics successfully")
         print("✅ Proof tree maintained automatically by ProofController._apply_tactic()")
-        print(f"✅ Check {output_dir}/ for PNG visualizations")
     else:
         print("❌ TEST FAILED!")
     
