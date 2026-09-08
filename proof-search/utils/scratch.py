@@ -7,8 +7,8 @@ import uuid
 from pathlib import Path
 from typing import Optional, Union
 
-# Artifacts Rocq leaves beside a .v file; they belong to the scratch copy.
-_BUILD_SUFFIXES = (".vo", ".vok", ".vos", ".glob")
+# Artifacts Coq leaves beside a .v file; they belong to the scratch copy.
+_BUILD_SUFFIXES = (".vo", ".vok", ".vos", ".glob", ".aux")
 
 
 def _module_safe(stem: str) -> str:

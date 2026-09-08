@@ -38,6 +38,7 @@ def test_close_preserves_source_and_removes_scratch_artifacts(tmp_path):
         scratch.with_suffix(".vok"),
         scratch.with_suffix(".vos"),
         scratch.with_suffix(".glob"),
+        scratch.with_suffix(".aux"),
         scratch.with_name(f".{scratch.stem}.aux"),
     ]
     for artifact in artifacts:
