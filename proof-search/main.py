@@ -577,6 +577,7 @@ def main():
     global components, logger, exit_code
     components = {}
     logger = None
+    config = None
     exit_code = 1
     
     def signal_handler(signum, frame):
@@ -584,6 +585,7 @@ def main():
         print(f"\n⚠️ Received {sig_name} signal - initiating cleanup...")
         
         if components:
+            assert config is not None
             _harvest_proof(components, config.output_dir, logger)
 
         if components and logger:
