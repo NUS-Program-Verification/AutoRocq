@@ -575,6 +575,7 @@ def main():
     global components, logger, exit_code
     components = {}
     logger = None
+    output_dir = None
     exit_code = 1
     
     def signal_handler(signum, frame):

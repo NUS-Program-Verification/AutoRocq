@@ -1,7 +1,10 @@
+import signal
 from pathlib import Path
 
+import pytest
+
+import main as main_module
 from backend.coq_interface import CoqInterface
-from main import clean_proof_file
 from utils.logger import setup_logger
 from utils.scratch import ScratchProof
 
@@ -69,7 +72,7 @@ def test_clean_proof_file_does_not_create_a_backup(tmp_path):
     source = tmp_path / "proof.v"
     source.write_text("Theorem proof : True. Proof. exact I. Qed.\n")
 
-    assert clean_proof_file(str(source), setup_logger("test_scratch"))
+    assert main_module.clean_proof_file(str(source), setup_logger("test_scratch"))
     assert source.read_text().endswith("Proof.\nAdmitted.")
     assert not Path(f"{source}.backup").exists()
 
@@ -85,3 +88,22 @@ def test_interface_cleaning_does_not_create_a_backup(tmp_path):
         assert not scratch.with_suffix(".v.backup").exists()
     finally:
         coq.close()
+
+
+def test_signal_before_output_directory_setup_exits_cleanly(monkeypatch):
+    handlers = {}
+    monkeypatch.setattr(
+        main_module.signal,
+        "signal",
+        lambda signum, handler: handlers.__setitem__(signum, handler),
+    )
+
+    def interrupt_during_argument_parsing():
+        handlers[signal.SIGINT](signal.SIGINT, None)
+
+    monkeypatch.setattr(main_module, "parse_arguments", interrupt_during_argument_parsing)
+
+    with pytest.raises(SystemExit) as stopped:
+        main_module.main()
+
+    assert stopped.value.code == 128 + signal.SIGINT
