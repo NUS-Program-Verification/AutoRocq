@@ -564,6 +564,7 @@ def _harvest_proof(components, output_dir, logger):
     coq_interface = (components or {}).get("coq_interface")
     if coq_interface is None:
         return
+    assert output_dir is not None, "output_dir must be resolved before harvesting"
     try:
         coq_interface.save_result(output_dir)
     except Exception as e:
@@ -576,14 +577,14 @@ def main():
     global components, logger, exit_code
     components = {}
     logger = None
-    config = None
     exit_code = 1
     
     def signal_handler(signum, frame):
         sig_name = signal.Signals(signum).name
         print(f"\n⚠️ Received {sig_name} signal - initiating cleanup...")
         
-        _harvest_proof(components, config.output_dir if config is not None else None, logger)
+        if components:
+            _harvest_proof(components, config.output_dir, logger)
 
         if components and logger:
             cleanup_components(components, logger)
