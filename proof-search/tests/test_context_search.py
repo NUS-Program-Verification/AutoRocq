@@ -120,7 +120,11 @@ def get_interface():
             coqproject_extra_options=config.coq.coqproject_extra_options,
             timeout=config.coq.timeout,
         )
-        assert coq.load(), f"CoqInterface.load() failed: {coq.get_last_error()}"
+        try:
+            assert coq.load(), f"CoqInterface.load() failed: {coq.get_last_error()}"
+        except BaseException:
+            coq.close()
+            raise
         print("✅ CoqInterface loaded")
         _interface = coq
     return _interface
