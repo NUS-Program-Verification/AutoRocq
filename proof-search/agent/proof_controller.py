@@ -420,12 +420,10 @@ class ProofController:
                     prompt = "You have just queried this information. Please provide a different query."
                     self.logger.info(f"⚠️  Step {self.global_step_id}: REPEATED QUERY -- skipped!")
                     continue
-                self.query_commands.append(decision_content)
-                prompt = self.context_manager.handle_query_call(decision_content, tool_call_id)
+                prompt, last_tool_success = self._run_query(decision_content, tool_call_id)
                 print(visualizer.render_action('query', decision_content))
                 if consecutive_queries == self.max_context_search:
                     prompt += "\n\nYou have hit the maximum number of 'query' calls. Please proceed with the current information until a successful 'tactic', or 'rollback' is applied."
-                self.logger.info(f"✅ Step {self.global_step_id}: QUERY success: {decision_content}")
                 continue  # query is transparent
 
             elif decision_type == 'rollback':
@@ -473,9 +471,9 @@ class ProofController:
 
                 if tactic_content.startswith(("Search", "Print", "Check", "About")):
                     prompt = f"You have supplied a 'query' as a 'tactic'. Please call the 'query' tool instead.\n"
-                    prompt += self.context_manager.handle_query_call(decision_content, tool_call_id)
+                    query_response, last_tool_success = self._run_query(decision_content, tool_call_id)
+                    prompt += query_response
                     self.logger.info(f"⚠️  Step {self.global_step_id}: QUERY AS TACTIC!")
-                    self.query_commands.append(decision_content)
                     self.gen_step_count -= 1
                     consecutive_queries += 1
                     consecutive_errors += 1
@@ -583,6 +581,16 @@ class ProofController:
                 continue
 
         yield {'type': 'done', 'success': self.is_successful}
+
+    def _run_query(self, query_content: str, tool_call_id: str) -> tuple[str, bool]:
+        """Run a query and keep its success status for the next tool response."""
+        self.query_commands.append(query_content)
+        response, success = self.context_manager.handle_query_call(query_content, tool_call_id)
+        if success:
+            self.logger.info(f"✅ Step {self.global_step_id}: QUERY completed: {query_content}")
+        else:
+            self.logger.warning(f"❌ Step {self.global_step_id}: QUERY failed: {query_content}")
+        return response, success
 
     ############################
     ##  Proof tree / state   ##

@@ -570,10 +570,10 @@ class ContextManager:
         
         return tool_response
     
-    def handle_query_call(self, query_content: str, tool_call_id: str) -> str:
+    def handle_query_call(self, query_content: str, tool_call_id: str) -> tuple[str, bool]:
         
         if not self.enable_context_search:
-            return "No results found: 'query' tool not available."
+            return "Query failed: 'query' tool not available.", False
 
         # Execute context search
         search_result, success = self._execute_context_search(query_content)
@@ -585,14 +585,15 @@ class ContextManager:
         })
 
         # Send tool response with query results
+        status = "executed" if success else "failed"
         tool_response = (
-            f"Query executed: {query_content}\n\n"
+            f"Query {status}: {query_content}\n\n"
             f"{search_result}\n"
         )
-        if not success:
+        if not success or search_result == "No results found.":
             tool_response += "\nYou may consider using a different query."
         
-        return tool_response
+        return tool_response, success
 
     def get_tactic(self, tactic_content: str, tool_call_id: str) -> str:
         # Ensure proper formatting
@@ -717,22 +718,20 @@ class ContextManager:
             return {'type': 'tactic', 'content': response_text.strip() if response_text else "reflexivity"}
 
     def _execute_context_search(self, query) -> tuple[str, bool]:
-        """Execute context search query and return formatted results."""
-        try:
-            if not self.context_search:
-                return "Context search not available", False
-            
-            # Use the context search system's unified search method
-            search_result = self.context_search.search(query)
-            
-            if not search_result or search_result.result_size == 0:
-                return f"No results found.", False
-            
-            return search_result.content, True
-            
-        except Exception as e:
-            self.logger.error(f"Error executing context search: {e}")
-            return f"Context search error: {str(e)}"
+        """Return the response text and whether the query ran successfully."""
+        if not self.context_search:
+            return "Context search not available", False
+
+        search_result = self.context_search.search(query)
+        error = (search_result.metadata or {}).get('error')
+        if error:
+            self.logger.warning(f"Query failed: {query} -> {error}")
+            return search_result.content, False
+
+        if search_result.result_size == 0 or "No results found" in search_result.content:
+            return "No results found.", True
+
+        return search_result.content, True
     
     def should_give_up(self) -> bool:
         """Determine if the agent should give up on the proof."""

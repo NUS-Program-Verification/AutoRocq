@@ -17,7 +17,9 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from agent.context_search import CoqCommandSearch
+from agent.context_search import CoqCommandSearch, SearchResult
+from agent.context_manager import ContextManager
+from agent.proof_controller import ProofController
 from backend.coq_interface import CoqInterface
 from utils.logger import setup_logger
 
@@ -168,6 +170,73 @@ def test_successful_query_is_unaffected():
     print("  ✅ success -> 1.0; genuine empty -> 0.0 but not flagged failed")
 
 
+def make_context_manager(result):
+    manager = object.__new__(ContextManager)
+    manager.context_search = FakeCoq(result)
+    manager.enable_context_search = True
+    manager.last_action_info = {}
+    manager.logger = setup_logger("test_search_failures")
+    return manager
+
+
+def test_context_manager_keeps_empty_and_failure_distinct():
+    failure = SearchResult(
+        content="Query failed: lsp endpoint died",
+        source="coq_command",
+        relevance_score=0.0,
+        metadata={"error": "lsp endpoint died"},
+    )
+    empty = SearchResult(
+        content="No results found.",
+        source="coq_command",
+        relevance_score=0.0,
+        metadata={},
+        result_size=len("No results found."),
+    )
+    hit = SearchResult(
+        content="Z.abs_nonneg: forall n : Z, 0 <= Z.abs n",
+        source="coq_command",
+        relevance_score=1.0,
+        metadata={},
+        result_size=44,
+    )
+
+    for result, expected_success, expected_status in [
+        (failure, False, "Query failed:"),
+        (empty, True, "Query executed:"),
+        (hit, True, "Query executed:"),
+    ]:
+        manager = make_context_manager(result)
+        response, success = manager.handle_query_call("Search Z.abs.", "call-1")
+
+        assert success is expected_success
+        assert expected_status in response
+        assert result.content in response
+
+
+class FakeContextManager:
+    def __init__(self, success):
+        self.success = success
+
+    def handle_query_call(self, _query, _tool_call_id):
+        return "query response", self.success
+
+
+def test_proof_controller_receives_query_status():
+    for expected_success in [True, False]:
+        controller = object.__new__(ProofController)
+        controller.context_manager = FakeContextManager(expected_success)
+        controller.query_commands = []
+        controller.global_step_id = 1
+        controller.logger = setup_logger("test_search_failures")
+
+        response, success = controller._run_query("Search Z.abs.", "call-1")
+
+        assert response == "query response"
+        assert success is expected_success
+        assert controller.query_commands == ["Search Z.abs."]
+
+
 TESTS = [
     test_extraction_failure_returns_none_and_records_why,
     test_genuinely_empty_search_is_not_a_failure,
@@ -176,6 +245,8 @@ TESTS = [
     test_print_branch_failure_returns_none,
     test_failed_query_never_reaches_the_llm_as_a_good_result,
     test_successful_query_is_unaffected,
+    test_context_manager_keeps_empty_and_failure_distinct,
+    test_proof_controller_receives_query_status,
 ]
 
 
