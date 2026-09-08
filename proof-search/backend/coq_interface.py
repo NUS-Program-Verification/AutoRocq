@@ -1024,13 +1024,7 @@ class CoqInterface:
         return re.sub(pattern, 'Top', text)
 
     def search(self, query: str) -> Optional[str]:
-        """Execute any Coq query command (Search, Print, Locate, About, Check, Print Assumptions) using aux_file.
-
-        Returns the query output on success, or None on failure with the reason
-        on self.last_error -- the same signal apply_tactic/reset_by_step use, read
-        back with get_last_error(). A query that legitimately matches nothing is a
-        success, not a failure: it returns "No results found.".
-        """
+        """Run a Coq query, returning None and setting last_error on failure."""
         try:
             self.last_error = None
             

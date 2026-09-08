@@ -9,10 +9,13 @@ import pytest
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from agent.context_search import CoqCommandSearch, ResultReducer
+from agent.context_manager import ContextManager
+from agent.context_search import CoqCommandSearch, ResultReducer, SearchResult
+from agent.proof_controller import ProofController
 from backend.coq_interface import CoqInterface
 from tests.test_utils import skip_if_libraries_missing, temp_example_copy
 from utils.config import ProofAgentConfig
+from utils.logger import setup_logger
 
 # Work on a throwaway copy: CoqInterface.load() pops the trailing "Admitted."
 # and coqpyt writes that change straight back to the file on disk, which would
@@ -135,6 +138,85 @@ def _shared_interface():
     """Close the shared session once this module's tests are done."""
     yield
     close_interface()
+
+
+class FakeCoq:
+    def __init__(self, result, error=None):
+        self.result = result
+        self.error = error
+        self.proof_file = object()
+
+    def search(self, _query):
+        return self.result
+
+    def get_last_error(self):
+        return self.error
+
+
+def test_failed_command_search_preserves_the_error():
+    error = "Error executing Search: lsp endpoint died"
+    result = CoqCommandSearch(FakeCoq(None, error)).auto_search("Search Z.abs.")
+
+    assert result.relevance_score == 0.0
+    assert result.metadata["failed"] is True
+    assert result.metadata["error"] == error
+    assert result.content == f"Query failed: {error}"
+
+
+def make_context_manager(result):
+    manager = object.__new__(ContextManager)
+    manager.context_search = FakeCoq(result)
+    manager.enable_context_search = True
+    manager.last_action_info = {}
+    manager.logger = setup_logger("test_context_search")
+    return manager
+
+
+def test_context_manager_distinguishes_failure_from_empty_results():
+    failure = SearchResult(
+        content="Query failed: lsp endpoint died",
+        source="coq_command",
+        relevance_score=0.0,
+        metadata={"error": "lsp endpoint died"},
+    )
+    empty = SearchResult(
+        content="No results found.",
+        source="coq_command",
+        relevance_score=0.0,
+        metadata={},
+        result_size=len("No results found."),
+    )
+
+    for result, expected_success in [(failure, False), (empty, True)]:
+        response, success = make_context_manager(result).handle_query_call(
+            "Search Z.abs.", "call-1"
+        )
+
+        assert success is expected_success
+        assert result.content in response
+
+
+class FakeContextManager:
+    def __init__(self, success):
+        self.success = success
+
+    def handle_query_call(self, _query, _tool_call_id):
+        return "query response", self.success
+
+
+def test_proof_controller_receives_query_status():
+    for expected_success in [True, False]:
+        controller = object.__new__(ProofController)
+        controller.context_manager = FakeContextManager(expected_success)
+        controller.query_commands = []
+        controller.global_step_id = 1
+        controller.logger = setup_logger("test_context_search")
+
+        response, success = controller._run_query("Search Z.abs.", "call-1")
+
+        assert response == "query response"
+        assert success is expected_success
+        assert controller.query_commands == ["Search Z.abs."]
 
 
 def make_search_output(size):
@@ -341,6 +423,9 @@ def test_reduction_bands():
 
 
 TESTS = [
+    test_failed_command_search_preserves_the_error,
+    test_context_manager_distinguishes_failure_from_empty_results,
+    test_proof_controller_receives_query_status,
     test_coq_setup,
     test_query_commands_return_real_results,
     test_command_search_returns_real_content,

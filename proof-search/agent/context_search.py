@@ -329,13 +329,7 @@ class CoqCommandSearch:
                 self.logger.error(f"❌ Failed to load CoqInterface: {e}")
     
     def _create_search_result(self, content: Optional[str], query: str, query_type: str, goal_context: str = "") -> SearchResult:
-        """Create a SearchResult with adaptive size reduction.
-
-        content is None when CoqInterface.search() failed. Handled here rather
-        than at each of the eight call sites, since all of them funnel through
-        this one function. A failure must never reach the LLM looking like a
-        confident result, so it is scored 0.0 and flagged in metadata.
-        """
+        """Create a reduced result and preserve backend failures."""
         if content is None:
             error = self.coq.get_last_error() or "query failed"
             self.logger.warning(f"Query failed: {query} -> {error}")
