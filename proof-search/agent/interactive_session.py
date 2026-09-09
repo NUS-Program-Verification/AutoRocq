@@ -229,6 +229,9 @@ class InteractiveSessionManager:
             print(f"✅ Tactic applied: {tactic}")
 
         status = self.controller.coq.get_proof_completion_status()
+        if status.get('ready_for_qed') and not status.get('qed_already_applied'):
+            if self.controller.coq.apply_qed():
+                status = self.controller.coq.get_proof_completion_status()
         if status.get('is_complete') and status.get('qed_already_applied'):
             print("🎉 Proof complete!")
             self.controller.is_successful = True
