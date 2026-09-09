@@ -110,7 +110,8 @@ def prove_single_file(
                 context_manager = ContextManager(
                     coq_interface,
                     api_key=config.llm.api_key,
-                    enable_history_context=getattr(config, "enable_history_context", True)
+                    enable_history_context=getattr(config, "enable_history_context", True),
+                    enable_context_search=getattr(config, "enable_context_search", True),
                 )
                 
                 # Initialize ProofController with updated parameters
@@ -118,7 +119,6 @@ def prove_single_file(
                     coq_interface=coq_interface,
                     context_manager=context_manager,
                     max_steps=100,  # Reasonable limit for testing
-                    enable_context_search=getattr(config, "enable_context_search", True),
                     enable_error_feedback=getattr(config, "enable_error_feedback", True),
                     max_context_search=getattr(config, "max_context_search", 3),
                 )
