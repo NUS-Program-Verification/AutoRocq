@@ -1023,7 +1023,7 @@ class CoqInterface:
         pattern = r'coqpyt_aux_[0-9a-f]{32}'
         return re.sub(pattern, 'Top', text)
 
-    def execute_query(self, query: str) -> Optional[str]:
+    def search(self, query: str) -> Optional[str]:
         """Run a Coq query, returning None and setting last_error on failure."""
         try:
             self.last_error = None

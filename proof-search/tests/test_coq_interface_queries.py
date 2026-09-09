@@ -1,4 +1,4 @@
-"""Test CoqInterface.execute_query() results and failure reporting against Rocq."""
+"""Test CoqInterface.search() results and failure reporting against Rocq."""
 
 import sys
 from pathlib import Path
@@ -141,7 +141,7 @@ def test_unit_query_failures_return_none_with_a_reason():
 
     coq = bare_interface()
     coq.proof_file = object()
-    assert coq.execute_query("Search Z.abs.") is None
+    assert coq.search("Search Z.abs.") is None
     assert coq.get_last_error() == "aux_file not accessible"
 
     for query, expected_error in [
@@ -169,7 +169,7 @@ def test_every_query_command_returns_real_content():
     by_type = {}
 
     for query, expected in QUERY_EXPECTATIONS:
-        result = coq.execute_query(query)
+        result = coq.search(query)
 
         assert result is not None, f"{query}: search failed -> {coq.get_last_error()}"
         assert result.strip(), f"{query}: empty result"
@@ -196,7 +196,7 @@ def test_every_query_command_returns_real_content():
 def test_empty_result_is_a_success_not_a_failure():
     """A bare `Print Assumptions` genuinely matches nothing -- that is not an error."""
     coq = get_interface()
-    result = coq.execute_query("Print Assumptions")
+    result = coq.search("Print Assumptions")
 
     assert result == "No results found.", f"got {result!r}"
     assert coq.get_last_error() is None, coq.get_last_error()
@@ -206,7 +206,7 @@ def test_empty_result_is_a_success_not_a_failure():
 def test_failed_query_returns_none_with_a_reason():
     """The failure half of the contract, against a live session."""
     coq = get_interface()
-    result = coq.execute_query("Frobnicate foo.")
+    result = coq.search("Frobnicate foo.")
 
     assert result is None, f"expected None for an unsupported command, got {result!r}"
     assert coq.get_last_error() == "Unsupported query type: frobnicate", (
@@ -215,7 +215,7 @@ def test_failed_query_returns_none_with_a_reason():
     print("  ✅ unsupported command -> None, last_error names the command")
 
     # The session must still work afterwards.
-    assert coq.execute_query("Check nat") is not None, "a failed query broke the session"
+    assert coq.search("Check nat") is not None, "a failed query broke the session"
     print("  ✅ session still usable after a failed query")
 
 
