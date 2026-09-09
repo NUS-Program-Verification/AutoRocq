@@ -17,8 +17,8 @@ from agent.proof_tree import ProofTree
 from agent.proof_controller import ProofController
 from utils.config import ProofAgentConfig
 from tests.test_utils import (
+    configure_test_library,
     reset_coq_file_to_admitted,
-    skip_if_libraries_missing,
     temp_example_copy,
 )
 
@@ -52,8 +52,7 @@ def test_proof_tree_evolution():
     print("✅ File cleaned successfully")
     
     # Load configuration
-    config = ProofAgentConfig.from_file(str(config_file))
-    skip_if_libraries_missing(config)
+    config = configure_test_library(ProofAgentConfig.from_file(str(config_file)))
     print(f"✅ Loaded configuration from {config_file}")
     
     # Create CoqInterface
