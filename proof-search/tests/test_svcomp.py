@@ -20,7 +20,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from backend.coq_interface import CoqInterface
-from tests.test_utils import skip_if_libraries_missing, temp_example_copy
+from tests.test_utils import configure_test_library, temp_example_copy
 from utils.config import ProofAgentConfig
 
 config_file = PROJECT_ROOT / "configs" / "default_config.json"
@@ -50,8 +50,7 @@ def coq():
     first; rewriting the file beforehand only invalidates coqpyt's disk cache
     and turns a warm load into a two-minute one.
     """
-    config = ProofAgentConfig.from_file(str(config_file))
-    skip_if_libraries_missing(config)
+    config = configure_test_library(ProofAgentConfig.from_file(str(config_file)))
 
     coq_file = temp_example_copy("main_loop_invariant_2_established_Coq.v")
     interface = CoqInterface(

@@ -140,11 +140,8 @@ def temp_example_copy(name: str) -> Path:
 
     The copy lives under a *fixed* directory for better coqpyt caching.
 
-    examples/_CoqProject is copied alongside it. The examples need it to
-    resolve their libframac imports, and a test driving coqpyt's ProofFile
-    directly has nothing that would regenerate it -- test_coqpyt_svcomp is the
-    one that would otherwise fail to load with "pop from empty list". A
-    CoqInterface with auto_setup_coqproject rewrites it with the same content.
+    examples/_CoqProject is copied alongside it when present. Tests that use a
+    bare ProofFile must otherwise create their own project file.
 
     Args:
         name: File name under examples/, e.g. "example.v".

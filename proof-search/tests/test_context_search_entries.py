@@ -24,7 +24,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from agent.context_search import CoqCommandSearch, ContextSearch, ResultReducer
 from backend.coq_interface import CoqInterface
-from tests.test_utils import skip_if_libraries_missing, temp_example_copy
+from tests.test_utils import configure_test_library, temp_example_copy
 from utils.config import ProofAgentConfig
 
 config_file = PROJECT_ROOT / "configs" / "default_config.json"
@@ -33,8 +33,7 @@ config_file = PROJECT_ROOT / "configs" / "default_config.json"
 @pytest.fixture(scope="module")
 def coq():
     """One read-only session; none of these tests changes the proof state."""
-    config = ProofAgentConfig.from_file(str(config_file))
-    skip_if_libraries_missing(config)
+    config = configure_test_library(ProofAgentConfig.from_file(str(config_file)))
 
     coq_file = temp_example_copy("main_loop_invariant_2_established_Coq.v")
     interface = CoqInterface(

@@ -24,7 +24,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from coqpyt.coq.exceptions import InvalidChangeException
 from coqpyt.coq.proof_file import ProofFile
-from tests.test_utils import skip_if_libraries_missing, temp_example_copy
+from tests.test_utils import configure_test_library, temp_example_copy
 from utils.config import ProofAgentConfig
 
 config_file = PROJECT_ROOT / "configs" / "default_config.json"
@@ -53,12 +53,15 @@ def open_goals(proof_file):
 def open_proof():
     """The goal file with its "Admitted." popped, ready for tactics.
 
-    temp_example_copy brings examples/_CoqProject along, which is what maps
-    libframac for a bare ProofFile -- nothing here regenerates it.
+    A bare ProofFile does not generate _CoqProject, so this fixture writes the
+    resolved test-library mapping into its private workspace.
     """
-    skip_if_libraries_missing(ProofAgentConfig.from_file(str(config_file)))
-
+    config = configure_test_library(ProofAgentConfig.from_file(str(config_file)))
     coq_file = temp_example_copy("main_loop_invariant_2_established_Coq.v")
+    library = config.coq.library_paths[0]
+    (coq_file.parent / "_CoqProject").write_text(
+        f"-R {library['path']} {library['name']}\n"
+    )
     with ProofFile(
         str(coq_file),
         workspace=str(coq_file.parent),

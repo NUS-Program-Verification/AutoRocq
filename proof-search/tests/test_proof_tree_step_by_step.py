@@ -22,7 +22,7 @@ from agent.context_manager import ContextManager
 from agent.proof_controller import ProofController
 from agent.proof_tree import ProofTree
 from backend.coq_interface import CoqInterface
-from tests.test_utils import skip_if_libraries_missing, temp_example_copy
+from tests.test_utils import configure_test_library, temp_example_copy
 from utils.config import ProofAgentConfig
 
 config_file = PROJECT_ROOT / "configs" / "default_config.json"
@@ -85,8 +85,7 @@ def walked(tmp_path_factory):
     Module-scoped: loading hex2bin_assert_3.v dominates the runtime, and every
     test below reads the same recording.
     """
-    config = ProofAgentConfig.from_file(str(config_file))
-    skip_if_libraries_missing(config)
+    config = configure_test_library(ProofAgentConfig.from_file(str(config_file)))
 
     coq_file = temp_example_copy("hex2bin_assert_3.v")
     output_dir = tmp_path_factory.mktemp("proof_tree")

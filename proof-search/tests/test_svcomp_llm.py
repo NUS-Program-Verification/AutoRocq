@@ -28,7 +28,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from agent.context_manager import ContextManager
 from agent.proof_controller import ProofController
 from backend.coq_interface import CoqInterface
-from tests.test_utils import skip_if_libraries_missing, temp_example_copy
+from tests.test_utils import configure_test_library, temp_example_copy
 from utils.config import ProofAgentConfig
 
 config_file = PROJECT_ROOT / "configs" / "default_config.json"
@@ -40,8 +40,7 @@ QUERY_PREFIXES = ("Search", "Print", "Locate", "About", "Check")
 
 @pytest.mark.llm
 def test_the_agent_runs_the_goal_and_keeps_its_books_straight(tmp_path):
-    config = ProofAgentConfig.from_file(str(config_file))
-    skip_if_libraries_missing(config)
+    config = configure_test_library(ProofAgentConfig.from_file(str(config_file)))
 
     coq_file = temp_example_copy("main_loop_invariant_2_established_Coq.v")
     coq = CoqInterface(
