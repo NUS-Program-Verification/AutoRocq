@@ -145,27 +145,36 @@ class FakeCoq:
         self.result = result
         self.error = error
         self.proof_file = object()
+        self.goal_contexts = []
 
-    def search(self, _query):
+    def search(self, _query, goal_context=""):
+        self.goal_contexts.append(goal_context)
         return self.result
 
     def get_last_error(self):
         return self.error
 
 
+class FakeProofState:
+    GOAL = "0 <= Z.abs x"
+
+    def get_goal_str(self):
+        return self.GOAL
+
+
 def test_failed_command_search_preserves_the_error():
     error = "Error executing Search: lsp endpoint died"
     result = CoqCommandSearch(FakeCoq(None, error)).auto_search("Search Z.abs.")
 
-    assert result.relevance_score == 0.0
-    assert result.metadata["failed"] is True
     assert result.metadata["error"] == error
     assert result.content == f"Query failed: {error}"
+    assert result.original_size == 0 and result.result_size == 0
 
 
 def make_context_manager(result):
     manager = object.__new__(ContextManager)
     manager.context_search = FakeCoq(result)
+    manager.coq = FakeProofState()
     manager.enable_context_search = True
     manager.last_action_info = {}
     manager.logger = setup_logger("test_context_search")
@@ -176,24 +185,30 @@ def test_context_manager_distinguishes_failure_from_empty_results():
     failure = SearchResult(
         content="Query failed: lsp endpoint died",
         source="coq_command",
-        relevance_score=0.0,
         metadata={"error": "lsp endpoint died"},
     )
     empty = SearchResult(
         content="No results found.",
         source="coq_command",
-        relevance_score=0.0,
         metadata={},
         result_size=len("No results found."),
     )
+    hit = SearchResult(
+        content="Z.abs_nonneg: forall n : Z, 0 <= Z.abs n",
+        source="coq_command",
+        metadata={},
+        result_size=len("Z.abs_nonneg: forall n : Z, 0 <= Z.abs n"),
+    )
 
-    for result, expected_success in [(failure, False), (empty, True)]:
-        response, success = make_context_manager(result).handle_query_call(
+    for result, expected_success in [(failure, False), (empty, True), (hit, True)]:
+        manager = make_context_manager(result)
+        response, success = manager.handle_query_call(
             "Search Z.abs.", "call-1"
         )
 
         assert success is expected_success
         assert result.content in response
+        assert manager.context_search.goal_contexts == [FakeProofState.GOAL]
 
 
 class FakeContextManager:
@@ -277,7 +292,7 @@ def test_command_search_returns_real_content():
 
         label = f"{method_name}({argument})"
         assert_real_result(label, result.content)
-        assert not result.metadata.get("failed"), f"{label}: {result.metadata}"
+        assert not result.metadata.get("error"), f"{label}: {result.metadata}"
         for fragment in expected:
             assert fragment in result.content, (
                 f"{label}: expected {fragment!r}, got {result.content[:300]!r}"
@@ -320,24 +335,24 @@ def test_large_results_are_summarized():
     )
 
 
-def test_relevance_score_flags_empty_results():
-    """relevance_score is a hit/miss flag, not a ranking score.
+def test_a_search_with_no_hits_reports_no_results():
+    """A miss is told apart from a hit by its content, nothing else.
 
-    _create_search_result sets it to 1.0 whenever the content does not say
-    "No results found" and 0.0 otherwise, so that is all it can be asserted to
-    mean. The actual ranking lives in ResultReducer._rank_entries.
+    _create_search_result passes Rocq's own wording through, so "No results
+    found." is the whole miss signal. Ranking of real hits is a separate thing
+    and lives in ResultReducer._rank_entries.
     """
     coq_search = CoqCommandSearch(get_interface())
 
     hit = coq_search.search_lemma("Z.abs", "0 <= Z.abs x")
-    assert hit.relevance_score == 1.0
     assert hit.source == "coq_command"
+    assert hit.result_size > 0 and "No results found" not in hit.content
 
     miss = coq_search.search_lemma("definitely_not_a_lemma_xyz")
-    assert miss.relevance_score == 0.0, (
-        f"a search with no hits should score 0.0, got {miss.relevance_score}"
+    assert "No results found" in miss.content, (
+        f"a search with no hits should say so, got {miss.content[:200]!r}"
     )
-    print(f"\n🎯 relevance: hit={hit.relevance_score} miss={miss.relevance_score}")
+    print(f"\n🎯 hit={hit.result_size} chars, miss={miss.content.strip()!r}")
 
 
 def test_goal_context_changes_the_summary():
@@ -435,7 +450,7 @@ TESTS = [
     test_query_commands_return_real_results,
     test_command_search_returns_real_content,
     test_large_results_are_summarized,
-    test_relevance_score_flags_empty_results,
+    test_a_search_with_no_hits_reports_no_results,
     test_goal_context_changes_the_summary,
     test_keyword_extraction,
     test_goal_context_reranks_entries,

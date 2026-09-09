@@ -13,10 +13,9 @@ from utils.logger import setup_logger
 
 @dataclass
 class SearchResult:
-    """Represents a search result with relevance score."""
+    """Represents a search result and how it was reduced."""
     content: str
     source: str  # 'coq_command'
-    relevance_score: float
     metadata: Dict[str, Any] = None
     result_size: int = 0
     original_size: int = 0  # Track original size before reduction
@@ -119,9 +118,12 @@ class ResultReducer:
         # Show top entries with their signatures
         for i, entry in enumerate(ranked_entries[:self.max_entries]):
             
-            # Update result hit count for this entry
-            result_hash = hash(frozenset(entry.items()))
-            self.result_hit_count[result_hash] = self.result_hit_count.get(result_hash, 0) + 1
+            # Count what we hand back, under the key _rank_entries reads.
+            # This used to hash the whole entry dict while the ranker looked the
+            # count up by md5 of the name, so the two never met and the decay
+            # below was dead: the same entries came back every search.
+            seen = entry.get('name', '').lower()
+            self.result_hit_count[seen] = self.result_hit_count.get(seen, 0) + 1
             
             name = entry.get('name', 'Unknown')
             signature = entry.get('signature', '')
@@ -236,14 +238,14 @@ class ResultReducer:
             if len(name) < 10:
                 score += 1
             
-            # Prefer standard library entries
-            if module in ['Z', 'Nat', 'List', 'Bool', 'Arith']:
+            # Prefer standard library entries. module is lowercased above, so
+            # these are too; against ['Z', 'Nat', ...] this could never match.
+            if module in ['z', 'nat', 'list', 'bool', 'arith']:
                 score += 1
             
-            # Apply hit count penalty (compute hash from entry name)
-            import hashlib
-            result_hash = hashlib.md5(name.encode()).hexdigest()
-            hit_count = self.result_hit_count.get(result_hash, 0)
+            # Push down what earlier summaries already handed back. `name` is
+            # lowercased above, which is the key _structured_summarization counts under.
+            hit_count = self.result_hit_count.get(name, 0)
             if hit_count > 0:
                 # exponential decay of frequently retrieved results
                 score -= 2 ** (hit_count - 1)
@@ -336,8 +338,7 @@ class CoqCommandSearch:
             return SearchResult(
                 content=f"Query failed: {error}",
                 source='coq_command',
-                relevance_score=0.0,
-                metadata={'query': query, 'type': query_type, 'failed': True, 'error': error},
+                metadata={'query': query, 'type': query_type, 'error': error},
             )
 
         original_size = len(content) if content else 0
@@ -353,7 +354,6 @@ class CoqCommandSearch:
         return SearchResult(
             content=reduced_content,
             source='coq_command',
-            relevance_score=1.0 if reduced_content and "No results found" not in reduced_content else 0.0,
             metadata={
                 'query': query, 
                 'type': query_type,
@@ -449,7 +449,6 @@ class CoqCommandSearch:
                     return SearchResult(
                         content=error_msg,
                         source='coq_command',
-                        relevance_score=0.0,
                         metadata={'query_type': query_type, 'error': 'Missing parameters'},
                         result_size=len(error_msg)
                     )
@@ -461,7 +460,6 @@ class CoqCommandSearch:
                     return SearchResult(
                         content=error_msg,
                         source='coq_command',
-                        relevance_score=0.0,
                         metadata={'query_type': query_type, 'error': 'Missing identifier'},
                         result_size=len(error_msg)
                     )
@@ -475,7 +473,6 @@ class CoqCommandSearch:
                     return SearchResult(
                         content=error_msg,
                         source='coq_command',
-                        relevance_score=0.0,
                         metadata={'query_type': query_type, 'error': 'Missing identifier'},
                         result_size=len(error_msg)
                     )
@@ -487,7 +484,6 @@ class CoqCommandSearch:
                     return SearchResult(
                         content=error_msg,
                         source='coq_command',
-                        relevance_score=0.0,
                         metadata={'query_type': query_type, 'error': 'Missing identifier'},
                         result_size=len(error_msg)
                     )
@@ -499,7 +495,6 @@ class CoqCommandSearch:
                     return SearchResult(
                         content=error_msg,
                         source='coq_command',
-                        relevance_score=0.0,
                         metadata={'query_type': query_type, 'error': 'Missing term'},
                         result_size=len(error_msg)
                     )
@@ -508,16 +503,15 @@ class CoqCommandSearch:
                 return SearchResult(
                     content=error_msg,
                     source='coq_command',
-                    relevance_score=0.0,
                     metadata={'query_type': query_type, 'error': 'Unknown query type'},
                     result_size=len(error_msg)
                 )
         except Exception as e:
             error_msg = f"Error executing {query_type}: {str(e)}"
+            self.logger.error(error_msg)
             return SearchResult(
                 content=error_msg,
                 source='coq_command',
-                relevance_score=0.0,
                 metadata={'query_type': query_type, 'error': str(e)},
                 result_size=len(error_msg)
             )
@@ -558,7 +552,6 @@ class ContextSearch:
             return SearchResult(
                 content=error_message,
                 source='coq_command',
-                relevance_score=0.0,
                 metadata={'query': query, 'error': str(e)},
                 result_size=len(error_message)
             )
