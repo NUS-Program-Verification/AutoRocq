@@ -17,9 +17,9 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 try:
     from backend.coq_interface import CoqInterface
-    from agent.context_search import CoqCommandSearch
+    from agent.context_search import ContextSearch
     from tests.test_utils import temp_example_copy
-    print("✅ CoqInterface and CoqCommandSearch available")
+    print("✅ CoqInterface and ContextSearch available")
 except ImportError as e:
     print(f"❌ Import failed: {e}")
     sys.exit(1)
@@ -39,14 +39,14 @@ def test_search_commands():
     print(f"📄 Proof file: {proof_file_path}")
     
     try:
-        # Initialize CoqInterface and CoqCommandSearch
+        # Initialize CoqInterface and ContextSearch
         coq = CoqInterface(str(proof_file_path))
         coq.load()
         print("✅ CoqInterface loaded successfully")
         
-        # Initialize CoqCommandSearch with ranking capabilities
-        coq_search = CoqCommandSearch(coq)
-        print("✅ CoqCommandSearch initialized\n")
+        # Initialize ContextSearch with ranking capabilities
+        coq_search = ContextSearch(coq)
+        print("✅ ContextSearch initialized\n")
         
         # Test commands with goal context for better ranking
         test_cases = [
@@ -71,8 +71,8 @@ def test_search_commands():
             print(f"{'=' * 70}")
             
             try:
-                # Use auto_search which applies ranking and reduction
-                search_result = coq_search.auto_search(cmd, goal_context)
+                # Use search() which applies ranking and reduction
+                search_result = coq_search.search(cmd, goal_context)
                 
                 print(f"\n📊 Result Metadata:")
                 print(f"  - Original Size: {search_result.original_size} characters")
