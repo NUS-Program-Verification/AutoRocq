@@ -722,7 +722,10 @@ class ContextManager:
         if not self.context_search:
             return "Context search not available", False
 
-        search_result = self.context_search.search(query)
+        goal_context = self.coq.get_goal_str() if self.coq else ""
+        search_result = self.context_search.search(
+            query, goal_context=goal_context or ""
+        )
         error = (search_result.metadata or {}).get('error')
         if error:
             self.logger.warning(f"Query failed: {query} -> {error}")
