@@ -1,8 +1,10 @@
 """
 Context Search Module for Proof Agent
 
-Provides Coq Command Search: Uses Coq's built-in Search/Print/Check/About/Locate/Print Assumptions commands
-with adaptive result size management.
+ContextSearch is the agent-facing search API: it runs Coq's built-in
+Search/Print/Check/About/Locate/Print Assumptions commands through
+CoqInterface.execute_query() and reduces what comes back to a size the LLM can
+read. ResultReducer does that reduction and is an implementation detail of it.
 """
 
 import re
@@ -304,8 +306,16 @@ class ResultReducer:
         return categories
 
 
-class CoqCommandSearch:
-    """Handles Coq command-line search operations with adaptive result reduction."""
+class ContextSearch:
+    """The agent-facing search API: Coq query commands with adaptive reduction.
+
+    Owns the whole path from a query string to something the LLM can read.
+    search() takes the command as written and is what the agent calls;
+    execute_coq_query() is the typed entry point; the rest name one command
+    each. This was two classes -- a CoqCommandSearch doing the work and a
+    same-shaped ContextSearch delegating to it -- which left no way to tell
+    from a name which one a caller was meant to reach for.
+    """
     
     def __init__(self, coq_interface):
         """
@@ -318,7 +328,7 @@ class CoqCommandSearch:
         self.reducer = ResultReducer()
 
         # Setup logger
-        self.logger = setup_logger("CoqCommandSearch")
+        self.logger = setup_logger("ContextSearch")
         
         # Ensure the CoqInterface is loaded
         if not hasattr(self.coq, 'proof_file') or self.coq.proof_file is None:
@@ -369,7 +379,7 @@ class CoqCommandSearch:
     def search_lemma(self, lemma_name: str, goal_context: str = "") -> SearchResult:
         """Search for a specific lemma or theorem."""
         query = f"Search {lemma_name}."
-        result = self.coq.search(query)
+        result = self.coq.execute_query(query)
         return self._create_search_result(result, query, 'search_lemma', goal_context)
     
     def search_pattern(self, pattern: str, goal_context: str = "") -> SearchResult:
@@ -379,13 +389,13 @@ class CoqCommandSearch:
             pattern = f"({pattern})"
         
         query = f"Search {pattern}."
-        result = self.coq.search(query)
+        result = self.coq.execute_query(query)
         return self._create_search_result(result, query, 'search_pattern', goal_context)
     
     def print_definition(self, identifier: str) -> SearchResult:
         """Print the definition of an identifier."""
         query = f"Print {identifier}."
-        result = self.coq.search(query)
+        result = self.coq.execute_query(query)
         return self._create_search_result(result, query, 'print_definition')
     
     def print_assumptions(self, identifier: str = None) -> SearchResult:
@@ -395,46 +405,73 @@ class CoqCommandSearch:
         else:
             query = "Print Assumptions."
         
-        result = self.coq.search(query)
+        result = self.coq.execute_query(query)
         return self._create_search_result(result, query, 'print_assumptions')
     
     def locate_definition(self, identifier: str) -> SearchResult:
         """Locate the definition of an identifier."""
         query = f"Locate {identifier}."
-        result = self.coq.search(query)
+        result = self.coq.execute_query(query)
         return self._create_search_result(result, query, 'locate_definition')
     
     def about_identifier(self, identifier: str) -> SearchResult:
         """Get information about an identifier."""
         query = f"About {identifier}."
-        result = self.coq.search(query)
+        result = self.coq.execute_query(query)
         return self._create_search_result(result, query, 'about_identifier')
     
     def check_term(self, term: str) -> SearchResult:
         """Check the type of a term."""
         query = f"Check {term}."
-        result = self.coq.search(query)
+        result = self.coq.execute_query(query)
         return self._create_search_result(result, query, 'check_term')
     
-    def auto_search(self, search_request: str, goal_context: str = "") -> SearchResult:
-        """Automatically determine search type and execute with adaptive reduction."""
-        search_request = search_request.strip()
-        
-        # All commands now go through the enhanced search() method
-        result = self.coq.search(search_request)
-        
-        # Determine type from command
-        cmd_type = search_request.split()[0].lower() if search_request else 'unknown'
-        type_mapping = {
-            'search': 'direct_search',
-            'print': 'direct_print',
-            'locate': 'direct_locate', 
-            'about': 'direct_about',
-            'check': 'direct_check'
-        }
+    def search(self, query: str, goal_context: str = "") -> SearchResult:
+        """Run a Coq query command as written, with adaptive result reduction.
 
-        query_type = type_mapping.get(cmd_type, 'auto_search')
-        return self._create_search_result(result, search_request, query_type, goal_context)
+        The entry point the agent reaches for: it takes the whole command
+        ("Search Z.abs.", "Print bool.") and works out the query type itself, so
+        a caller with a command string does not have to pick a typed method.
+
+        Never raises. A failure comes back as a SearchResult whose content says
+        what went wrong and whose metadata carries 'error', which is what
+        ContextManager relies on to tell a failure from an empty result.
+
+        Args:
+            query: The Coq query command
+            goal_context: Current proof goal, for relevance ranking
+
+        Returns:
+            SearchResult from Coq command execution
+        """
+        try:
+            search_request = query.strip()
+
+            # All commands go through CoqInterface.execute_query()
+            result = self.coq.execute_query(search_request)
+            
+            # Determine type from command
+            cmd_type = search_request.split()[0].lower() if search_request else 'unknown'
+            type_mapping = {
+                'search': 'direct_search',
+                'print': 'direct_print',
+                'locate': 'direct_locate', 
+                'about': 'direct_about',
+                'check': 'direct_check'
+            }
+
+            query_type = type_mapping.get(cmd_type, 'auto_search')
+            return self._create_search_result(result, search_request, query_type, goal_context)
+        except Exception as e:
+            self.logger.error(f"Error in Coq command search: {e}")
+            error_message = f"Search error: {str(e)}"
+            return SearchResult(
+                content=error_message,
+                source='coq_command',
+                relevance_score=0.0,
+                metadata={'query': query, 'error': str(e)},
+                result_size=len(error_message)
+            )
     
     def execute_coq_query(self, query_type: str, identifier: str = None, pattern: str = None, goal_context: str = "") -> SearchResult:
         """Execute a Coq query by type with parameters and adaptive reduction."""
@@ -521,49 +558,3 @@ class CoqCommandSearch:
                 metadata={'query_type': query_type, 'error': str(e)},
                 result_size=len(error_msg)
             )
-
-
-class ContextSearch:
-    """
-    Simplified context search interface with adaptive result reduction.
-    """
-    
-    def __init__(self, coq_interface, history_file: str = None):
-        """
-        Initialize context search with CoqInterface.
-        
-        Args:
-            coq_interface: Instance of CoqInterface from backend.coq_interface
-            history_file: Ignored (kept for backward compatibility)
-        """
-        self.coq_search = CoqCommandSearch(coq_interface)
-        self.logger = setup_logger("ContextSearch")
-    
-    def search(self, query: str, goal_context: str = "") -> SearchResult:
-        """
-        Simplified search interface with adaptive result reduction.
-        
-        Args:
-            query: Search query string
-            goal_context: Current proof goal context for relevance ranking
-        
-        Returns:
-            SearchResult from Coq command execution
-        """
-        try:
-            return self.coq_search.auto_search(query, goal_context)
-        except Exception as e:
-            self.logger.error(f"Error in Coq command search: {e}")
-            error_message = f"Search error: {str(e)}"
-            return SearchResult(
-                content=error_message,
-                source='coq_command',
-                relevance_score=0.0,
-                metadata={'query': query, 'error': str(e)},
-                result_size=len(error_message)
-            )
-    
-    def execute_coq_query(self, query_type: str, identifier: str = None, pattern: str = None, goal_context: str = "") -> SearchResult:
-        """Execute a Coq query with adaptive result reduction."""
-        return self.coq_search.execute_coq_query(query_type, identifier, pattern, goal_context)
-    

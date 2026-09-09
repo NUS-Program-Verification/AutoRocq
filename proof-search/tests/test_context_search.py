@@ -11,7 +11,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from agent.context_manager import ContextManager
-from agent.context_search import CoqCommandSearch, ResultReducer, SearchResult
+from agent.context_search import ContextSearch, ResultReducer, SearchResult
 from agent.proof_controller import ProofController
 from backend.coq_interface import CoqInterface
 from tests.test_utils import configure_test_library, temp_example_copy
@@ -51,7 +51,7 @@ SEARCH_EXPECTATIONS = [
     ("check_term", "to_sint32", "", ["to_sint32"]),
     ("about_identifier", "Z.abs", "", ["Z.abs"]),
     ("locate_definition", "le", "", ["le"]),
-    ("auto_search", "Print bool.", "", ["Inductive bool : Set"]),
+    ("search", "Print bool.", "", ["Inductive bool : Set"]),
 ]
 
 # Entries shaped like _parse_search_entries output, for the ranking tests.
@@ -89,12 +89,12 @@ def load_config():
 def assert_real_result(query, result):
     """Fail on anything that is not a genuine query hit.
 
-    CoqInterface.search() returns None on failure (reason on last_error), and
-    CoqCommandSearch turns that into content prefixed "Query failed:". Neither
+    CoqInterface.execute_query() returns None on failure (reason on last_error),
+    and ContextSearch turns that into content prefixed "Query failed:". Neither
     is a result, and nor is a successful-but-empty "No results found." for the
     queries asserted here.
     """
-    assert result is not None, f"{query}: query failed (search returned None)"
+    assert result is not None, f"{query}: query failed (execute_query returned None)"
     assert result, f"{query}: empty result"
     assert not result.startswith("Query failed:"), f"{query}: {result}"
     assert result != "No results found.", f"{query}: query found nothing"
@@ -141,21 +141,33 @@ def _shared_interface():
 
 
 class FakeCoq:
+    """A CoqInterface double: the query layer."""
+
     def __init__(self, result, error=None):
         self.result = result
         self.error = error
-        self.proof_file = object()
+        self.proof_file = object()  # non-None, so ContextSearch skips load()
 
-    def search(self, _query):
+    def execute_query(self, _query):
         return self.result
 
     def get_last_error(self):
         return self.error
 
 
+class FakeSearch:
+    """A ContextSearch double: the layer ContextManager talks to."""
+
+    def __init__(self, result):
+        self.result = result
+
+    def search(self, _query, goal_context=""):
+        return self.result
+
+
 def test_failed_command_search_preserves_the_error():
     error = "Error executing Search: lsp endpoint died"
-    result = CoqCommandSearch(FakeCoq(None, error)).auto_search("Search Z.abs.")
+    result = ContextSearch(FakeCoq(None, error)).search("Search Z.abs.")
 
     assert result.relevance_score == 0.0
     assert result.metadata["failed"] is True
@@ -165,7 +177,7 @@ def test_failed_command_search_preserves_the_error():
 
 def make_context_manager(result):
     manager = object.__new__(ContextManager)
-    manager.context_search = FakeCoq(result)
+    manager.context_search = FakeSearch(result)
     manager.enable_context_search = True
     manager.last_action_info = {}
     manager.logger = setup_logger("test_context_search")
@@ -255,7 +267,7 @@ def test_query_commands_return_real_results():
 
     coq = get_interface()
     for query, expected in QUERY_EXPECTATIONS:
-        result = coq.search(query)
+        result = coq.execute_query(query)
         assert_real_result(query, result)
         for fragment in expected:
             assert fragment in result, (
@@ -265,10 +277,10 @@ def test_query_commands_return_real_results():
 
 
 def test_command_search_returns_real_content():
-    """The same, through CoqCommandSearch, with its size bookkeeping checked."""
-    print("\n🔬 Testing CoqCommandSearch:")
+    """The same, through ContextSearch, with its size bookkeeping checked."""
+    print("\n🔬 Testing ContextSearch:")
 
-    coq_search = CoqCommandSearch(get_interface())
+    coq_search = ContextSearch(get_interface())
     small_result_limit = ResultReducer().max_small_result
 
     for method_name, argument, goal_context, expected in SEARCH_EXPECTATIONS:
@@ -305,7 +317,7 @@ def test_command_search_returns_real_content():
 
 def test_large_results_are_summarized():
     """A genuinely large search must be cut down, not passed through."""
-    coq_search = CoqCommandSearch(get_interface())
+    coq_search = ContextSearch(get_interface())
     result = coq_search.search_pattern("(_ <= _)", "x <= y -> y <= z -> x <= z")
 
     assert_real_result("search_pattern((_ <= _))", result.content)
@@ -327,7 +339,7 @@ def test_relevance_score_flags_empty_results():
     "No results found" and 0.0 otherwise, so that is all it can be asserted to
     mean. The actual ranking lives in ResultReducer._rank_entries.
     """
-    coq_search = CoqCommandSearch(get_interface())
+    coq_search = ContextSearch(get_interface())
 
     hit = coq_search.search_lemma("Z.abs", "0 <= Z.abs x")
     assert hit.relevance_score == 1.0
@@ -342,12 +354,10 @@ def test_relevance_score_flags_empty_results():
 
 def test_goal_context_changes_the_summary():
     """The goal context has to actually reach the ranking and change the output."""
-    coq_search = CoqCommandSearch(get_interface())
-
     # One reducer per call: _structured_summarization mutates result_hit_count,
     # so a shared instance would make this order-dependent.
     def summarize(goal_context):
-        return CoqCommandSearch(get_interface()).search_pattern(
+        return ContextSearch(get_interface()).search_pattern(
             "(_ <= _)", goal_context
         ).content
 
