@@ -602,7 +602,7 @@ class ContextManager:
                
         return tactic_content
 
-    def get_action(self, context_prompt: str, role: str = "user", tool_call_id: str = None, tool_success: bool = False) -> tuple[dict, str]:
+    def get_action(self, context_prompt: str, role: str = "user", tool_call_id: str = None, should_optimize: bool = False) -> tuple[dict, str]:
         """
         Prompt the LLM with user prompt or tool response to generate an tool call.
         
@@ -641,7 +641,7 @@ class ContextManager:
                     role = "user"
                     tool_call_id = None
             
-            llm_result = self.chat_session.send_message(context_prompt, role=role, tool_call_id=tool_call_id, should_optimize=tool_success)
+            llm_result = self.chat_session.send_message(context_prompt, role=role, tool_call_id=tool_call_id, should_optimize=should_optimize)
             invalid_error_count = 0
             while llm_result.get("error"):
                 self.logger.error(f"❌ LLM error: {str(llm_result)}")

@@ -2,6 +2,7 @@
 
 import sys
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -203,19 +204,24 @@ class FakeContextManager:
         return "query response", self.success
 
 
-def test_proof_controller_receives_query_status():
-    for expected_success in [True, False]:
+def test_proof_controller_logs_query_status():
+    for query_success in [True, False]:
         controller = object.__new__(ProofController)
-        controller.context_manager = FakeContextManager(expected_success)
+        controller.context_manager = FakeContextManager(query_success)
         controller.query_commands = []
         controller.global_step_id = 1
-        controller.logger = setup_logger("test_context_search")
+        controller.logger = Mock()
 
-        response, success = controller._run_query("Search Z.abs.", "call-1")
+        response = controller._run_query("Search Z.abs.", "call-1")
 
         assert response == "query response"
-        assert success is expected_success
         assert controller.query_commands == ["Search Z.abs."]
+        if query_success:
+            controller.logger.info.assert_called_once()
+            controller.logger.warning.assert_not_called()
+        else:
+            controller.logger.warning.assert_called_once()
+            controller.logger.info.assert_not_called()
 
 
 def make_search_output(size):
@@ -424,7 +430,7 @@ def test_reduction_bands():
 TESTS = [
     test_failed_command_search_preserves_the_error,
     test_context_manager_distinguishes_failure_from_empty_results,
-    test_proof_controller_receives_query_status,
+    test_proof_controller_logs_query_status,
     test_coq_setup,
     test_query_commands_return_real_results,
     test_command_search_returns_real_content,
