@@ -294,6 +294,7 @@ def initialize_components(args, config: ProofAgentConfig, logger) -> Dict[str, A
             enable_hammer=config.enable_hammer,
             max_context_search=config.max_context_search,
             history_file=str(history_file),
+            output_dir=config.output_dir,
             interactive=config.interactive
         )
         
@@ -563,6 +564,7 @@ def _harvest_proof(components, output_dir, logger):
     coq_interface = (components or {}).get("coq_interface")
     if coq_interface is None:
         return
+    assert output_dir is not None, "output_dir must be resolved before harvesting"
     try:
         coq_interface.save_result(output_dir)
     except Exception as e:
@@ -575,14 +577,16 @@ def main():
     global components, logger, exit_code
     components = {}
     logger = None
-    output_dir = None
+    config = None
     exit_code = 1
     
     def signal_handler(signum, frame):
         sig_name = signal.Signals(signum).name
         print(f"\n⚠️ Received {sig_name} signal - initiating cleanup...")
         
-        _harvest_proof(components, output_dir, logger)
+        if components:
+            assert config is not None
+            _harvest_proof(components, config.output_dir, logger)
 
         if components and logger:
             cleanup_components(components, logger)
@@ -609,8 +613,9 @@ def main():
     if not validate_arguments(args, config):
         sys.exit(1)
     
-    # Setup output directory
-    output_dir = setup_output_directory(args.output_dir or config.output_dir)
+    # Setup output directory. Recording the resolved path on the config is what
+    # lets every component write its artifacts there.
+    config.output_dir = str(setup_output_directory(args.output_dir or config.output_dir))
     
     # Use absolute path
     args.proof_file = str(Path(args.proof_file).resolve())
@@ -622,7 +627,7 @@ def main():
     config.coq.max_steps = args.max_steps or config.coq.max_steps
     config.log_level = args.log_level or config.log_level
     if not config.log_file:
-        config.log_file = str(output_dir / "autorocq.log")
+        config.log_file = str(Path(config.output_dir) / "autorocq.log")
     
     # Clear existing log file
     if config.log_file:
@@ -658,7 +663,7 @@ def main():
     logger.info(f"🔧 Configuration:")
     logger.info(f"   Max steps: {config.coq.max_steps}")
     logger.info(f"   Context search: {config.enable_context_search}")
-    logger.info(f"   Output directory: {output_dir}")
+    logger.info(f"   Output directory: {config.output_dir}")
 
     # Log library configuration if present
     if hasattr(config.coq, 'library_paths') and config.coq.library_paths:
@@ -793,7 +798,7 @@ def main():
         except Exception as e:
             logger.warning(f"Could not retrieve token statistics: {e}")
         
-        _harvest_proof(components, output_dir, logger)
+        _harvest_proof(components, config.output_dir, logger)
 
         cleanup_components(components, logger)
         

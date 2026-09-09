@@ -183,6 +183,7 @@ def test_llm_proof_generation_with_controller():
                 max_steps=100,  # Reasonable limit for testing
                 enable_error_feedback=getattr(config, "enable_error_feedback", True),
                 max_context_search=getattr(config, "max_context_search", 3),
+                output_dir=str(coq_file.parent),
             )
             print("✅ ProofController initialized successfully")
             
