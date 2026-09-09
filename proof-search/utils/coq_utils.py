@@ -3,9 +3,92 @@
 import re
 import difflib
 import traceback
+from collections import deque
 from enum import Enum
+from pathlib import Path
 
-def extract_essential_proof_content(logger, proof_file_content):
+
+DECLARATION_PATTERN = re.compile(
+    r"^(?:(?:Local|Global|Polymorphic|Monomorphic)\s+)*"
+    r"(?:Definition|Parameter|Parameters|Axiom|Axioms|Inductive|CoInductive|"
+    r"Record|Structure|Variant|Fixpoint|CoFixpoint|Class|Instance)\s+"
+    r"([A-Za-z_][A-Za-z0-9_']*)\b"
+)
+
+
+def _same_file(left, right):
+    """Compare source paths without requiring either path to still exist."""
+    if not left or not right:
+        return False
+    return Path(left).resolve(strict=False) == Path(right).resolve(strict=False)
+
+
+def _referenced_terms(file_context, step):
+    """Resolve global identifiers in a parsed Rocq sentence to CoqPyt terms."""
+    stack = file_context.expr(step)[:0:-1]
+    referenced = []
+
+    while stack:
+        element = stack.pop()
+        if file_context.is_id(element):
+            identifier = file_context.get_id(element)
+            term = file_context.get_term(identifier) if identifier else None
+            if term is not None and term not in referenced:
+                referenced.append(term)
+        elif file_context.is_notation(element):
+            # The notation node's children still contain references used in its
+            # arguments. Resolving the notation itself may require a Locate
+            # query, which ProofTerm.context has already done for the theorem.
+            stack.append(element[1:])
+        elif isinstance(element, list):
+            stack.extend(
+                value for value in reversed(element) if isinstance(value, (dict, list))
+            )
+        elif isinstance(element, dict):
+            stack.extend(
+                value
+                for value in reversed(element.values())
+                if isinstance(value, (dict, list))
+            )
+
+    return referenced
+
+
+def _structured_dependencies(proof, file_context, file_path):
+    """Return local declarations needed by a proof in stable source order."""
+    needed = {}
+    pending = deque(getattr(proof, "context", []))
+
+    while pending:
+        term = pending.popleft()
+        step = getattr(term, "step", None)
+        if step is None or not _same_file(getattr(term, "file_path", None), file_path):
+            continue
+
+        # Inductive types and their constructors are separate context names
+        # backed by the same Rocq sentence, so key by the shared Step object.
+        step_key = id(step)
+        if step_key in needed or step is getattr(proof, "step", None):
+            continue
+
+        needed[step_key] = term
+        pending.extend(_referenced_terms(file_context, step))
+
+    def source_position(term):
+        start = term.step.ast.range.start
+        return start.line, start.character
+
+    return sorted(needed.values(), key=source_position)
+
+
+def extract_essential_proof_content(
+    logger,
+    proof_file_content,
+    *,
+    proof=None,
+    file_context=None,
+    file_path=None,
+):
     """Extract essential content from proof file: imports and definitions for terms used in the theorem."""
     try:
         lines = proof_file_content.split('\n')
@@ -47,7 +130,8 @@ def extract_essential_proof_content(logger, proof_file_content):
                 continue
             
             # Start of a new definition
-            if line_stripped.startswith(('Definition ', 'Parameter ', 'Axiom ')):
+            declaration = DECLARATION_PATTERN.match(line_stripped)
+            if declaration:
 
                 # Save previous definition if exists
                 if current_def and current_def_lines:
@@ -58,9 +142,8 @@ def extract_essential_proof_content(logger, proof_file_content):
                     }
 
                 # Start new definition
-                parts = line_stripped.split()
-                if len(parts) >= 2:
-                    current_def = parts[1].rstrip(':')
+                if declaration.group(1):
+                    current_def = declaration.group(1)
                     current_def_lines = [line]
 
                     # Check if definition ends on same line
@@ -113,16 +196,33 @@ def extract_essential_proof_content(logger, proof_file_content):
         if not theorem_found:
             return "## Essential proof context:\n(current theorem not found)\n"
 
-        # Step 3: Find all transitive dependencies using dependency graph
-        needed_definitions = find_transitive_dependencies(theorem_dependencies, all_definitions)
+        # Step 3: Find all transitive dependencies using dependency graph. At
+        # runtime, prefer CoqPyt's parsed context: it distinguishes globals from
+        # binders and recognizes every declaration form supported by Rocq.
+        structured_terms = None
+        if proof is not None and file_context is not None and file_path is not None:
+            structured_terms = _structured_dependencies(proof, file_context, file_path)
+
+        if structured_terms is None:
+            # The text fallback cannot distinguish imported globals and local
+            # binders. Only names known to be local declarations are useful for
+            # constructing this file's dependency closure.
+            theorem_dependencies.intersection_update(all_definitions)
+            needed_definitions = find_transitive_dependencies(
+                theorem_dependencies, all_definitions
+            )
+        else:
+            needed_definitions = set()
 
         logger.debug(f"All available definitions: {list(all_definitions.keys())}")
-        logger.debug(f"Required definitions: {needed_definitions}")
+        if structured_terms is None:
+            logger.debug(f"Required definitions: {needed_definitions}")
+        else:
+            logger.debug(
+                "Required declarations: %s",
+                [term.text.splitlines()[0] for term in structured_terms],
+            )
         
-        missing_definitions = theorem_dependencies - needed_definitions
-        if len(missing_definitions) > 0:
-            logger.warning(f"Missing definitions for theorem: {list(missing_definitions)}")
-
         # Step 4: Extract imports
         imports = []
         for line in lines:
@@ -144,11 +244,18 @@ def extract_essential_proof_content(logger, proof_file_content):
 
         # Add only the needed definitions in dependency order
         added_definitions = set()
-        for def_name in needed_definitions:
-            if def_name in all_definitions and def_name not in added_definitions:
-                essential_content.extend(all_definitions[def_name]['lines'])
+        if structured_terms is not None:
+            for term in structured_terms:
+                essential_content.extend(term.text.splitlines())
                 essential_content.append("")
-                added_definitions.add(def_name)
+                added_definitions.add(id(term.step))
+        else:
+            # Preserve source order instead of iterating the dependency set.
+            for def_name, definition in all_definitions.items():
+                if def_name in needed_definitions and def_name not in added_definitions:
+                    essential_content.extend(definition['lines'])
+                    essential_content.append("")
+                    added_definitions.add(def_name)
 
         # Add the theorem and proof
         essential_content.append("")
