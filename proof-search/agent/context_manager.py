@@ -602,6 +602,25 @@ class ContextManager:
                
         return tactic_content
 
+    def _tool_role_problem(self, tool_call_id) -> Optional[str]:
+        """Return why a tool response is invalid, or None."""
+        if tool_call_id is None:
+            return "tool_call_id is required for tool role"
+
+        messages = self.chat_session.messages
+        if not messages:
+            return "empty message thread"
+
+        last = messages[-1]
+        if last.get("role") != "assistant":
+            return "last message must be an assistant message"
+        if "tool_calls" not in last:
+            return "last assistant message must have tool_calls"
+        if len(last["tool_calls"]) != 1:
+            return "last assistant message must have exactly one tool call"
+
+        return None
+
     def get_action(self, context_prompt: str, role: str = "user", tool_call_id: str = None, should_optimize: bool = False) -> tuple[dict, str]:
         """
         Prompt the LLM with user prompt or tool response to generate an tool call.
@@ -626,17 +645,9 @@ class ContextManager:
             
             if role == "tool":
                 self.logger.info(f"Tool response:\n{context_prompt}")
-                # Validate that if role is "tool", we must have a tool_call_id
-                # and the last message must be an assistant message with tool_calls
-                try:
-                    assert tool_call_id is not None, "tool_call_id is required for tool role"
-                    assert self.chat_session.messages, "empty message thread"
-                    assert self.chat_session.messages[-1].get("role") == "assistant", "last message must be an assistant message"
-                    assert "tool_calls" in self.chat_session.messages[-1], "last assistant message must have tool_calls"
-                    assert len(self.chat_session.messages[-1]["tool_calls"]) == 1, "last assistant message must have exactly one tool call"
-                except AssertionError as e:
-                    # This shouldn't happen if we checked above, but fallback
-                    self.logger.error(f"❌ {e}")
+                problem = self._tool_role_problem(tool_call_id)
+                if problem:
+                    self.logger.error(f"❌ {problem}")
                     self.logger.warning("🔄 Sending as user message instead")
                     role = "user"
                     tool_call_id = None
