@@ -349,7 +349,7 @@ class ProofController:
             error_tactics.clear()
 
         tool_call_id = None
-        last_tool_success = False
+        should_optimize = False
         role = "user"
         proof_tree_str = self.proof_tree.get_proof_tree_string()
         prompt = self.context_manager.build_initial_prompt(proof_tree_str)
@@ -380,7 +380,7 @@ class ProofController:
                 self.logger.error(f"Error: Step count mismatch! expected={expected_coq_steps} != coq={current_step_count_coq}. Exiting early...")
                 exit(1)
 
-            decision, tool_call_id = self.context_manager.get_action(prompt, role=role, tool_call_id=tool_call_id, tool_success=last_tool_success)
+            decision, tool_call_id = self.context_manager.get_action(prompt, role=role, tool_call_id=tool_call_id, should_optimize=should_optimize)
 
             if decision is None:
                 self.logger.error(f"❌ Step {self.global_step_id}: Failed to parse LLM decision. Skipping step.")
@@ -397,10 +397,10 @@ class ProofController:
             decision_type = decision.get('type')
             decision_content = decision.get('content')
             role = "tool"
-            last_tool_success = False
+            should_optimize = False
 
             if decision_type == 'plan':
-                last_tool_success = True
+                should_optimize = True
                 prompt = self.context_manager.handle_plan_call(decision_content, tool_call_id)
                 print(visualizer.render_action('plan', decision_content))
                 if self.context_manager.should_give_up():
@@ -420,12 +420,10 @@ class ProofController:
                     prompt = "You have just queried this information. Please provide a different query."
                     self.logger.info(f"⚠️  Step {self.global_step_id}: REPEATED QUERY -- skipped!")
                     continue
-                self.query_commands.append(decision_content)
-                prompt = self.context_manager.handle_query_call(decision_content, tool_call_id)
+                prompt = self._run_query(decision_content, tool_call_id)
                 print(visualizer.render_action('query', decision_content))
                 if consecutive_queries == self.max_context_search:
                     prompt += "\n\nYou have hit the maximum number of 'query' calls. Please proceed with the current information until a successful 'tactic', or 'rollback' is applied."
-                self.logger.info(f"✅ Step {self.global_step_id}: QUERY success: {decision_content}")
                 continue  # query is transparent
 
             elif decision_type == 'rollback':
@@ -450,7 +448,7 @@ class ProofController:
                                                         if t['step_number'] <= target_step_number]
                     else:
                         self._tactics_with_states[:] = []
-                    last_tool_success = True
+                    should_optimize = True
                     _clear_error_tracking()
                     proof_tree_str = self.proof_tree.get_proof_tree_string()
                     self.logger.info(f"✅ Rollback successful: {rollback_distance} step{'s' if rollback_distance != 1 else ''} back to index {target_index} (step_number {target_step_number})")
@@ -473,9 +471,9 @@ class ProofController:
 
                 if tactic_content.startswith(("Search", "Print", "Check", "About")):
                     prompt = f"You have supplied a 'query' as a 'tactic'. Please call the 'query' tool instead.\n"
-                    prompt += self.context_manager.handle_query_call(decision_content, tool_call_id)
+                    query_response = self._run_query(decision_content, tool_call_id)
+                    prompt += query_response
                     self.logger.info(f"⚠️  Step {self.global_step_id}: QUERY AS TACTIC!")
-                    self.query_commands.append(decision_content)
                     self.gen_step_count -= 1
                     consecutive_queries += 1
                     consecutive_errors += 1
@@ -537,7 +535,7 @@ class ProofController:
                         prompt += "Application failed with supplied tactic, but hammer succeeded.\n"
 
                 # Tactic succeeded
-                last_tool_success = True
+                should_optimize = True
                 _clear_error_tracking()
                 self.logger.info(f"🏆 Tactic applied: '{tactic_content}'")
 
@@ -583,6 +581,16 @@ class ProofController:
                 continue
 
         yield {'type': 'done', 'success': self.is_successful}
+
+    def _run_query(self, query_content: str, tool_call_id: str) -> str:
+        """Run a query and log whether it succeeded."""
+        self.query_commands.append(query_content)
+        response, success = self.context_manager.handle_query_call(query_content, tool_call_id)
+        if success:
+            self.logger.info(f"✅ Step {self.global_step_id}: QUERY completed: {query_content}")
+        else:
+            self.logger.warning(f"❌ Step {self.global_step_id}: QUERY failed: {query_content}")
+        return response
 
     ############################
     ##  Proof tree / state   ##

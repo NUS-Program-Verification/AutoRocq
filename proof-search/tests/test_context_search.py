@@ -2,6 +2,7 @@
 
 import sys
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -9,10 +10,13 @@ import pytest
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from agent.context_search import CoqCommandSearch, ResultReducer
+from agent.context_manager import ContextManager
+from agent.context_search import CoqCommandSearch, ResultReducer, SearchResult
+from agent.proof_controller import ProofController
 from backend.coq_interface import CoqInterface
-from tests.test_utils import skip_if_libraries_missing, temp_example_copy
+from tests.test_utils import configure_test_library, temp_example_copy
 from utils.config import ProofAgentConfig
+from utils.logger import setup_logger
 
 # Work on a throwaway copy: CoqInterface.load() pops the trailing "Admitted."
 # and coqpyt writes that change straight back to the file on disk, which would
@@ -79,29 +83,21 @@ REDUCTION_BANDS = [
 
 def load_config():
     config = ProofAgentConfig.from_file(str(config_file))
-    skip_if_libraries_missing(config)
-    return config
-
-
-# CoqInterface.search() never raises -- it returns its failures as ordinary
-# strings, so a test that only checks "did a string come back" passes on every
-# one of them. See backend/coq_interface.py::search / _run_aux_query.
-QUERY_ERRORS = (
-    "aux_file not accessible",
-    "Empty query",
-    "No search term provided",
-    "No results found.",
-    "Unsupported query type:",
-    "Error executing ",
-    "Query error:",
-)
+    return configure_test_library(config)
 
 
 def assert_real_result(query, result):
-    """Fail on the failure strings search() returns in place of raising."""
+    """Fail on anything that is not a genuine query hit.
+
+    CoqInterface.search() returns None on failure (reason on last_error), and
+    CoqCommandSearch turns that into content prefixed "Query failed:". Neither
+    is a result, and nor is a successful-but-empty "No results found." for the
+    queries asserted here.
+    """
+    assert result is not None, f"{query}: query failed (search returned None)"
     assert result, f"{query}: empty result"
-    for sentinel in QUERY_ERRORS:
-        assert not result.startswith(sentinel), f"{query}: query failed -> {result!r}"
+    assert not result.startswith("Query failed:"), f"{query}: {result}"
+    assert result != "No results found.", f"{query}: query found nothing"
 
 
 _interface = None
@@ -142,6 +138,90 @@ def _shared_interface():
     """Close the shared session once this module's tests are done."""
     yield
     close_interface()
+
+
+class FakeCoq:
+    def __init__(self, result, error=None):
+        self.result = result
+        self.error = error
+        self.proof_file = object()
+
+    def search(self, _query):
+        return self.result
+
+    def get_last_error(self):
+        return self.error
+
+
+def test_failed_command_search_preserves_the_error():
+    error = "Error executing Search: lsp endpoint died"
+    result = CoqCommandSearch(FakeCoq(None, error)).auto_search("Search Z.abs.")
+
+    assert result.relevance_score == 0.0
+    assert result.metadata["failed"] is True
+    assert result.metadata["error"] == error
+    assert result.content == f"Query failed: {error}"
+
+
+def make_context_manager(result):
+    manager = object.__new__(ContextManager)
+    manager.context_search = FakeCoq(result)
+    manager.enable_context_search = True
+    manager.last_action_info = {}
+    manager.logger = setup_logger("test_context_search")
+    return manager
+
+
+def test_context_manager_distinguishes_failure_from_empty_results():
+    failure = SearchResult(
+        content="Query failed: lsp endpoint died",
+        source="coq_command",
+        relevance_score=0.0,
+        metadata={"error": "lsp endpoint died"},
+    )
+    empty = SearchResult(
+        content="No results found.",
+        source="coq_command",
+        relevance_score=0.0,
+        metadata={},
+        result_size=len("No results found."),
+    )
+
+    for result, expected_success in [(failure, False), (empty, True)]:
+        response, success = make_context_manager(result).handle_query_call(
+            "Search Z.abs.", "call-1"
+        )
+
+        assert success is expected_success
+        assert result.content in response
+
+
+class FakeContextManager:
+    def __init__(self, success):
+        self.success = success
+
+    def handle_query_call(self, _query, _tool_call_id):
+        return "query response", self.success
+
+
+def test_proof_controller_logs_query_status():
+    for query_success in [True, False]:
+        controller = object.__new__(ProofController)
+        controller.context_manager = FakeContextManager(query_success)
+        controller.query_commands = []
+        controller.global_step_id = 1
+        controller.logger = Mock()
+
+        response = controller._run_query("Search Z.abs.", "call-1")
+
+        assert response == "query response"
+        assert controller.query_commands == ["Search Z.abs."]
+        if query_success:
+            controller.logger.info.assert_called_once()
+            controller.logger.warning.assert_not_called()
+        else:
+            controller.logger.warning.assert_called_once()
+            controller.logger.info.assert_not_called()
 
 
 def make_search_output(size):
@@ -197,6 +277,7 @@ def test_command_search_returns_real_content():
 
         label = f"{method_name}({argument})"
         assert_real_result(label, result.content)
+        assert not result.metadata.get("failed"), f"{label}: {result.metadata}"
         for fragment in expected:
             assert fragment in result.content, (
                 f"{label}: expected {fragment!r}, got {result.content[:300]!r}"
@@ -347,6 +428,9 @@ def test_reduction_bands():
 
 
 TESTS = [
+    test_failed_command_search_preserves_the_error,
+    test_context_manager_distinguishes_failure_from_empty_results,
+    test_proof_controller_logs_query_status,
     test_coq_setup,
     test_query_commands_return_real_results,
     test_command_search_returns_real_content,

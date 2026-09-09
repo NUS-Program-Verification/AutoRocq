@@ -1,4 +1,4 @@
-"""Test raw Rocq query commands through CoqInterface.search()."""
+"""Test CoqInterface.search() results and failure reporting against Rocq."""
 
 import sys
 from pathlib import Path
@@ -9,8 +9,9 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import pytest
 
 from backend.coq_interface import CoqInterface
-from tests.test_utils import skip_if_libraries_missing, temp_example_copy
+from tests.test_utils import configure_test_library, temp_example_copy
 from utils.config import ProofAgentConfig
+from utils.logger import setup_logger
 
 coq_file = temp_example_copy("main_loop_invariant_2_established_Coq.v")
 config_file = PROJECT_ROOT / "configs" / "default_config.json"
@@ -60,7 +61,7 @@ def get_interface():
     global _interface
     if _interface is None:
         config = ProofAgentConfig.from_file(str(config_file))
-        skip_if_libraries_missing(config)
+        configure_test_library(config)
         coq = CoqInterface(
             file_path=str(coq_file),
             workspace=config.coq.workspace or str(coq_file.parent),
@@ -92,6 +93,75 @@ def _shared_interface():
     close_interface()
 
 
+class FakeAuxFile:
+    def __init__(self, queries=None, raises=None):
+        self._queries = queries or []
+        self._raises = raises
+
+    def _AuxFile__get_queries(self, _kind):
+        if self._raises is not None:
+            raise self._raises
+        return self._queries
+
+    def read(self):
+        return "Require Import ZArith.\n"
+
+    def get_diagnostics(self, _cmd, _identifier, _line):
+        if self._raises is not None:
+            raise self._raises
+        return ""
+
+
+def bare_interface():
+    coq = object.__new__(CoqInterface)
+    coq.logger = setup_logger("test_coq_interface_queries")
+    coq.timeout = 0.01
+    coq.last_error = None
+    return coq
+
+
+def test_unit_query_failures_return_none_with_a_reason():
+    coq = bare_interface()
+    result = coq._run_aux_query(
+        FakeAuxFile(raises=RuntimeError("lsp endpoint died")),
+        "Search Z.abs.",
+        0,
+    )
+    assert result is None
+    assert "lsp endpoint died" in coq.get_last_error()
+
+    coq = bare_interface()
+    result = coq._run_aux_query(
+        FakeAuxFile(raises=RuntimeError("diagnostics unavailable")),
+        "Print nat.",
+        0,
+    )
+    assert result is None
+    assert "diagnostics unavailable" in coq.get_last_error()
+
+    coq = bare_interface()
+    coq.proof_file = object()
+    assert coq.search("Search Z.abs.") is None
+    assert coq.get_last_error() == "aux_file not accessible"
+
+    for query, expected_error in [
+        ("", "Empty query"),
+        ("Search .", "No search term provided"),
+        ("Frobnicate foo.", "Unsupported query type: frobnicate"),
+    ]:
+        coq = bare_interface()
+        assert coq._run_aux_query(FakeAuxFile(), query, 0) is None
+        assert coq.get_last_error() == expected_error
+
+
+def test_unit_empty_search_is_not_a_failure():
+    coq = bare_interface()
+    result = coq._run_aux_query(FakeAuxFile(), "Search Z.abs.", 0)
+
+    assert result == "No results found."
+    assert coq.get_last_error() is None
+
+
 def test_every_query_command_returns_real_content():
     """All six command types have to come back with the content they should."""
     print("\n🔍 Testing search() across every query command type:")
@@ -101,9 +171,8 @@ def test_every_query_command_returns_real_content():
     for query, expected in QUERY_EXPECTATIONS:
         result = coq.search(query)
 
-        assert result and result.strip(), f"{query}: empty result"
-        for sentinel in ("aux_file not accessible", "Error executing ", "Query error:"):
-            assert not result.startswith(sentinel), f"{query}: query failed -> {result!r}"
+        assert result is not None, f"{query}: search failed -> {coq.get_last_error()}"
+        assert result.strip(), f"{query}: empty result"
         assert result != "No results found.", f"{query}: found nothing"
 
         if expected is None:
@@ -134,9 +203,28 @@ def test_empty_result_is_a_success_not_a_failure():
     print("\n  ✅ empty result -> 'No results found.', last_error stays None")
 
 
+def test_failed_query_returns_none_with_a_reason():
+    """The failure half of the contract, against a live session."""
+    coq = get_interface()
+    result = coq.search("Frobnicate foo.")
+
+    assert result is None, f"expected None for an unsupported command, got {result!r}"
+    assert coq.get_last_error() == "Unsupported query type: frobnicate", (
+        coq.get_last_error()
+    )
+    print("  ✅ unsupported command -> None, last_error names the command")
+
+    # The session must still work afterwards.
+    assert coq.search("Check nat") is not None, "a failed query broke the session"
+    print("  ✅ session still usable after a failed query")
+
+
 TESTS = [
+    test_unit_query_failures_return_none_with_a_reason,
+    test_unit_empty_search_is_not_a_failure,
     test_every_query_command_returns_real_content,
     test_empty_result_is_a_success_not_a_failure,
+    test_failed_query_returns_none_with_a_reason,
 ]
 
 
