@@ -9,7 +9,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import pytest
 
 from backend.coq_interface import CoqInterface
-from tests.test_utils import skip_if_libraries_missing, temp_example_copy
+from tests.test_utils import configure_test_library, temp_example_copy
 from utils.config import ProofAgentConfig
 from utils.logger import setup_logger
 
@@ -61,7 +61,7 @@ def get_interface():
     global _interface
     if _interface is None:
         config = ProofAgentConfig.from_file(str(config_file))
-        skip_if_libraries_missing(config)
+        configure_test_library(config)
         coq = CoqInterface(
             file_path=str(coq_file),
             workspace=config.coq.workspace or str(coq_file.parent),

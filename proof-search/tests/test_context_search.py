@@ -13,7 +13,7 @@ from agent.context_manager import ContextManager
 from agent.context_search import CoqCommandSearch, ResultReducer, SearchResult
 from agent.proof_controller import ProofController
 from backend.coq_interface import CoqInterface
-from tests.test_utils import skip_if_libraries_missing, temp_example_copy
+from tests.test_utils import configure_test_library, temp_example_copy
 from utils.config import ProofAgentConfig
 from utils.logger import setup_logger
 
@@ -82,8 +82,7 @@ REDUCTION_BANDS = [
 
 def load_config():
     config = ProofAgentConfig.from_file(str(config_file))
-    skip_if_libraries_missing(config)
-    return config
+    return configure_test_library(config)
 
 
 def assert_real_result(query, result):

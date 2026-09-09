@@ -15,9 +15,31 @@ def skip_if_libraries_missing(config):
                 f"Coq library '{entry.get('name', '?') if isinstance(entry, dict) else '?'}' "
                 f"not available at {path}; configure coq.library_paths (README step 3)"
             )
+        missing_vo = [
+            source for source in Path(path).rglob("*.v")
+            if not source.with_suffix(".vo").is_file()
+        ]
+        if missing_vo:
+            pytest.skip(
+                f"Coq library at {path} is not compiled; run make in that directory"
+            )
 
 # Project root for tests
 PROJECT_ROOT = Path(__file__).parent.parent
+
+
+def configure_test_library(config):
+    """Use the compiled libautorocq checkout for live tests."""
+    configured_path = os.getenv("AUTOROCQ_LIBRARY_PATH")
+    library_path = Path(configured_path) if configured_path else (
+        PROJECT_ROOT.parent / "AutoRocq-bench" / "libautorocq"
+    )
+    library_path = library_path.resolve()
+    if not (library_path / "BuiltIn.v").is_file():
+        pytest.skip(f"libautorocq source not found at {library_path}")
+    config.coq.library_paths = [{"path": str(library_path), "name": "libframac"}]
+    skip_if_libraries_missing(config)
+    return config
 
 
 def reset_coq_file_to_admitted(file_path: Path, backup: bool = True) -> bool:
