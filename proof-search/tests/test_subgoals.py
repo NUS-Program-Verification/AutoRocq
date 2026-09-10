@@ -2,6 +2,8 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -39,8 +41,7 @@ def test_intros_tactic():
             # Load the file
             success = coq_interface.load()
             if not success:
-                print(f"❌ Failed to load file: {coq_interface.get_last_error()}")
-                return False
+                pytest.fail(f"failed to load file: {coq_interface.get_last_error()}")
             
             print("✅ File loaded successfully")
 
@@ -49,14 +50,12 @@ def test_intros_tactic():
             print(f"\n📊 Proof status: loaded={status.get('has_proof')}, steps={status.get('proof_steps')}")
             
             if not status.get("has_proof", False):
-                print("❌ No proof loaded")
-                return False
+                pytest.fail("no proof loaded")
             
             # Clear existing proof steps to start fresh
             print("\n🔄 Clearing existing proof steps...")
             if not coq_interface.clear_unproven_proof_steps():
-                print("❌ Failed to clear proof steps")
-                return False
+                pytest.fail("failed to clear proof steps")
             
             print("✅ Proof steps cleared")
             
@@ -115,8 +114,7 @@ def test_intros_tactic():
             success = coq_interface.apply_tactic("intros.")
             if not success:
                 error = coq_interface.get_last_error()
-                print(f"❌ Failed to apply intros.: {error}")
-                return False
+                pytest.fail(f"failed to apply intros.: {error}")
             
             print("✅ intros. applied successfully")
             
@@ -215,18 +213,18 @@ def test_intros_tactic():
             print("\n" + "="*80)
             print("✅ TEST COMPLETED")
             print("="*80)
+
+            assert goals_before_clean != goals_after_clean
+            assert len(subgoals_before) == len(subgoals_after) == 1
+            assert str(subgoals_before[0].ty) != str(subgoals_after[0].ty)
+            assert len(subgoals_after[0].hyps) > len(subgoals_before[0].hyps)
             
-            return True
-        
         finally:
             # Always clean up
             coq_interface.close()
             
     except Exception as e:
-        print(f"❌ Testing failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+        pytest.fail(f"subgoal transition test failed: {e}")
 
 if __name__ == "__main__":
     print("=" * 80)
@@ -246,7 +244,8 @@ if __name__ == "__main__":
         sys.exit(1)
     
     # Run the test
-    success = test_intros_tactic()
+    test_intros_tactic()
+    success = True
     
     # Final summary
     print("\n" + "="*80)

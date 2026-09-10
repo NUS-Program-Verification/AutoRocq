@@ -41,7 +41,7 @@ def test_search_commands():
     try:
         # Initialize CoqInterface and ContextSearch
         coq = CoqInterface(str(proof_file_path))
-        coq.load()
+        assert coq.load(), coq.get_last_error()
         print("✅ CoqInterface loaded successfully")
         
         # Initialize ContextSearch with ranking capabilities
@@ -89,22 +89,16 @@ def test_search_commands():
                 print()
                 
             except Exception as e:
-                print(f"❌ Query failed: {e}")
-                import traceback
-                traceback.print_exc()
-                print()
+                pytest.fail(f"query {cmd!r} failed: {e}")
         
         # Clean up
         coq.close()
-        return True
         
     except Exception as e:
-        print(f"❌ Test failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+        pytest.fail(f"context-search integration failed: {e}")
 
 
 if __name__ == "__main__":
-    success = test_search_commands()
+    test_search_commands()
+    success = True
     sys.exit(0 if success else 1)
