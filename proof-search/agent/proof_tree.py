@@ -120,8 +120,7 @@ class ProofTree:
     ) -> Optional['ProofTreeNode']:
         """
         Add a branching node that creates multiple subgoals.
-        Each subgoal extracts ONLY its conclusion (the final goal to prove),
-        not the full forall/let context.
+        Each child retains the complete goal expression and its hypotheses.
         """
         if not self.open_subgoals:
             self.logger.warning("No open subgoals to branch from")
@@ -133,17 +132,8 @@ class ProofTree:
             self.logger.error(f"❌ Parent subgoal is not a ProofTreeNode! Type: {type(parent_subgoal)}")
             raise TypeError(f"Expected ProofTreeNode but got {type(parent_subgoal)}")
         
-        def extract_goal_conclusion(goal) -> tuple:
-            """
-            Extract ONLY the final conclusion to prove, stripping forall/let bindings.
-            
-            For example, from:
-              forall x y, let z := x + y in P(z)
-            Extract only:
-              P(z)
-            
-            Returns: (conclusion_str, hypotheses_str)
-            """
+        def format_goal(goal) -> tuple:
+            """Return the complete conclusion and formatted hypotheses."""
             if hasattr(goal, 'ty'):
                 goal_full = str(goal.ty).strip()
                 
@@ -157,29 +147,7 @@ class ProofTree:
                             hyps_lines.append(f"{names_str}: {hyp.ty}")
                     hyps_str = '\n'.join(hyps_lines)
                 
-                # Parse the goal to extract conclusion
-                # Strategy: Look for the final '->' or just use the whole thing if no arrows
-                
-                # Split by '->' to find the conclusion (last part)
-                parts = goal_full.split('->')
-                if len(parts) > 1:
-                    # The conclusion is after the last '->'
-                    conclusion = parts[-1].strip()
-                else:
-                    # No '->', the whole thing is the conclusion
-                    conclusion = goal_full
-                
-                # Also handle 'let ... in' constructs
-                # If conclusion starts with 'let', we want what comes after 'in'
-                while conclusion.strip().startswith('let '):
-                    # Find the matching 'in'
-                    in_pos = conclusion.find(' in ')
-                    if in_pos != -1:
-                        conclusion = conclusion[in_pos + 4:].strip()
-                    else:
-                        break
-                
-                return (conclusion, hyps_str)
+                return (goal_full, hyps_str)
             elif isinstance(goal, str):
                 return (goal.strip(), "")
             else:
@@ -201,7 +169,7 @@ class ProofTree:
         # Create child nodes for each new subgoal
         new_subgoal_nodes = []
         for i, subgoal in enumerate(subgoals):
-            goal_conclusion, hyps_str = extract_goal_conclusion(subgoal)
+            goal_conclusion, hyps_str = format_goal(subgoal)
             
             self.logger.debug(f"Subgoal {i+1}/{len(subgoals)}:")
             self.logger.debug(f"  Conclusion: {goal_conclusion[:100]}{'...' if len(goal_conclusion) > 100 else ''}")
@@ -268,25 +236,25 @@ class ProofTree:
         
         self.logger.info(f"Attaching tactic to first open subgoal (index 0, total open: {len(self.open_subgoals)})")
         
-        # Create and attach the new node
+        focused_goal_completed = len(subgoals_after) < len(subgoals_before)
+
+        # A completed branch has no remaining branch-local goal. The first
+        # goal in the global after-state belongs to the next open branch.
         new_node = ProofTreeNode(
             tactic=tactic,
             goals_before=goals_before,
-            goals_after=goals_after,
+            goals_after="" if focused_goal_completed else goals_after,
             hypotheses_before=hypotheses_before,
-            hypotheses_after=hypotheses_after,
+            hypotheses_after="" if focused_goal_completed else hypotheses_after,
             step_number=step_number,
-            parent=target_subgoal
+            parent=target_subgoal,
+            status="Proved" if focused_goal_completed else "Applied",
         )
         
         target_subgoal.children.append(new_node)
         
         # Update open subgoals list based on what happened
-        if len(subgoals_after) == 0:
-            # First subgoal was completed - remove it
-            self.open_subgoals.pop(0)
-            self.logger.info(f"First subgoal completed. {len(self.open_subgoals)} open subgoals remaining")
-        elif len(subgoals_after) < len(subgoals_before):
+        if focused_goal_completed:
             # First subgoal was completed - remove it
             self.open_subgoals.pop(0)
             self.logger.info(f"First subgoal completed. {len(self.open_subgoals)} open subgoals remaining")
@@ -351,8 +319,8 @@ class ProofTree:
         # A leaf node represents an open subgoal that needs work
         def find_leaf_nodes(node: 'ProofTreeNode', leaves: list):
             """Find all leaf nodes in the tree."""
-            if not node.children:
-                # This is a leaf node - it's an open subgoal
+            if not node.children and node.status != "Proved":
+                # A proved tactic is also a leaf, but not an open subgoal.
                 leaves.append(node)
             else:
                 # Recursively check children
