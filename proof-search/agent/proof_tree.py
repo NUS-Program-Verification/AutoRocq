@@ -197,7 +197,6 @@ class ProofTree:
         )
         
         parent_subgoal.children.append(branching_node)
-        self.open_subgoals.remove(parent_subgoal)
         
         # Create child nodes for each new subgoal
         new_subgoal_nodes = []
@@ -222,7 +221,9 @@ class ProofTree:
             branching_node.children.append(subgoal_node)
             new_subgoal_nodes.append(subgoal_node)
         
-        self.open_subgoals.extend(new_subgoal_nodes)
+        # Replace the focused goal in place. Existing background goals must
+        # stay after its children, in the same order reported by CoqPyt.
+        self.open_subgoals[0:1] = new_subgoal_nodes
         
         for i, node in enumerate(self.open_subgoals):
             if not isinstance(node, ProofTreeNode):
