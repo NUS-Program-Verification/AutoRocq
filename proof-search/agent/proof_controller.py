@@ -65,7 +65,7 @@ class ProofController:
 
         # Initialize counters and history
         self.global_step_id = 0         # Global ID for tool call / proof step
-        self.gen_step_count = 0         # Global step count for tactic / HL / rollback
+        self.gen_step_count = 0         # Counts generated tactics and rollbacks toward max_steps
         self.successful_tactics = []    # Global successful tactics
         self.failed_tactics = []        # Global failed tactics
         self.query_commands = []        # Global query commands
