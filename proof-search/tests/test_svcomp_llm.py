@@ -226,7 +226,7 @@ def test_llm_proof_generation_with_controller():
             
             print(f"📊 Controller Statistics:")
             print(f"   - Success: {is_successful}")
-            print(f"   - Steps taken: {controller.step_count}/{controller.max_steps}")
+            print(f"   - Steps taken: {controller.gen_step_count}/{controller.max_steps}")
             print(f"   - Successful tactics: {len(controller.successful_tactics)}")
             print(f"   - Query commands: {len(controller.query_commands)}")
             print(f"   - Failed tactics: {len(controller.failed_tactics)}")

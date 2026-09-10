@@ -111,7 +111,7 @@ def test_prove_theorem():
             print("=" * 50)
             
             print(f"✅ Success: {success}")
-            print(f"📊 Steps taken: {controller.step_count}/{controller.max_steps}")
+            print(f"📊 Steps taken: {controller.gen_step_count}/{controller.max_steps}")
             
             if controller.successful_tactics:
                 print(f"✅ Successful tactics ({len(controller.successful_tactics)}):")

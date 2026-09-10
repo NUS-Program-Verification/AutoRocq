@@ -88,7 +88,7 @@ def test_proof_tree_evolution():
         
         # Initialize proof controller
         controller.current_theorem_name = "hex2bin_assert_3"
-        controller.step_count = 0
+        controller.gen_step_count = 0
         controller.successful_tactics = []
         
         print(f"\n📋 Starting proof: {controller.current_theorem_name}")
@@ -197,7 +197,7 @@ def test_proof_tree_evolution():
         if 'metadata' in tree_dict:
             metadata = tree_dict['metadata']
             print(f"   Open subgoals: {metadata.get('open_subgoals_count', 0)}")
-            print(f"   Total steps applied: {controller.step_count}")
+            print(f"   Total steps applied: {controller.gen_step_count}")
         
         # Print final full tree
         print("\n" + "=" * 80)
