@@ -1,6 +1,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -86,10 +88,7 @@ def test_proof_with_correct_tactics():
     try:
         # **CRITICAL: Clean the proof file first before loading**
         print("🧹 Step 1: Clean the proof file to remove any completed proof")
-        clean_success = clean_proof_file(coq_file)
-        if not clean_success:
-            print("❌ Failed to clean proof file - cannot proceed")
-            return False
+        assert clean_proof_file(coq_file)
         
         # Load configuration from file (this includes library_paths and auto_setup_coqproject)
         config = configure_test_library(ProofAgentConfig.from_file(str(config_file)))
@@ -110,10 +109,7 @@ def test_proof_with_correct_tactics():
             print("✅ Created CoqInterface with auto-configured libraries")
             
             # Load the cleaned file using agent API
-            success = coq_interface.load()
-            if not success:
-                print(f"❌ Failed to load cleaned file: {coq_interface.get_last_error()}")
-                return False
+            assert coq_interface.load(), coq_interface.get_last_error()
             
             print("✅ Cleaned file loaded successfully")
             
@@ -121,9 +117,7 @@ def test_proof_with_correct_tactics():
             status = coq_interface.get_proof_status()
             print(f"📊 Proof status after cleaning: loaded={status.get('has_proof')}, steps={status.get('proof_steps')}")
             
-            if not status.get("has_proof", False):
-                print("❌ No proof loaded properly after cleaning")
-                return False
+            assert status.get("has_proof", False), status
             
             print(f"🎯 Working on clean proof with {status['proof_steps']} initial steps")
             
@@ -161,6 +155,9 @@ def test_proof_with_correct_tactics():
                 
                 # Apply tactic using CoqInterface API
                 success = coq_interface.apply_tactic(tactic)
+                assert success, (
+                    f"{tactic.strip()} failed: {coq_interface.get_last_error()}"
+                )
                 
                 if success:
                     successful_steps += 1
@@ -197,16 +194,16 @@ def test_proof_with_correct_tactics():
                     
                     # Continue to try remaining tactics
                     continue
+
+            assert successful_steps == len(tactics)
+            assert failed_steps == 0
         
         finally:
             # Always clean up
             coq_interface.close()
             
     except Exception as e:
-        print(f"❌ Proof testing failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+        pytest.fail(f"scripted SV-COMP proof failed: {e}")
 
 if __name__ == "__main__":
     print("=" * 70)
