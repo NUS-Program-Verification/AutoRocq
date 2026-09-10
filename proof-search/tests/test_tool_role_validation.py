@@ -40,6 +40,7 @@ def test_invalid_tool_responses_explain_the_problem():
             "call_1",
             "exactly one tool call",
         ),
+        (ANSWERED, "call_2", "must match the last assistant tool call"),
     ]
 
     for messages, tool_call_id, expected in cases:

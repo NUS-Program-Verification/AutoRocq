@@ -618,6 +618,8 @@ class ContextManager:
             return "last assistant message must have tool_calls"
         if len(last["tool_calls"]) != 1:
             return "last assistant message must have exactly one tool call"
+        if last["tool_calls"][0].get("id") != tool_call_id:
+            return "tool_call_id must match the last assistant tool call"
 
         return None
 
