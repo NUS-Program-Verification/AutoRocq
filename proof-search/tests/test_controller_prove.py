@@ -12,7 +12,7 @@ from backend.coq_interface import CoqInterface
 from agent.context_manager import ContextManager
 from agent.proof_controller import ProofController
 from utils.config import ProofAgentConfig
-from tests.test_utils import temp_example_copy
+from tests.test_utils import configure_test_library, temp_example_copy
 
 # --- CONFIGURATION ---
 coq_file = temp_example_copy("main_loop_invariant_2_established_Coq.v")
@@ -50,12 +50,13 @@ def test_prove_theorem():
     try:
         # Clean the proof file first
         print("🧹 Step 1: Clean proof file")
-        if not clean_proof_file(coq_file):
-           return False
+        assert clean_proof_file(coq_file)
         
         # Load configuration
         print("📖 Step 2: Load configuration")
-        config = ProofAgentConfig.from_file(str(config_file))
+        config = configure_test_library(ProofAgentConfig.from_file(str(config_file)))
+        if not config.llm.api_key:
+            pytest.skip("requires an LLM API key")
         print(f"✅ Configuration loaded")
         
         # Create CoqInterface
@@ -71,9 +72,7 @@ def test_prove_theorem():
         try:
             # Load the file
             print("📂 Step 4: Load Coq file")
-            if not coq_interface.load():
-                print(f"❌ Failed to load file: {coq_interface.get_last_error()}")
-                return False
+            assert coq_interface.load(), coq_interface.get_last_error()
             print("✅ Coq file loaded")
             
             # Create ContextManager
@@ -129,16 +128,14 @@ def test_prove_theorem():
             print(f"   Complete: {final_status.get('is_complete', False)}")
             print(f"   Ready for Qed: {final_status.get('ready_for_qed', False)}")
             
-            return success
+            assert success
+            assert final_status.get("is_complete") or final_status.get("ready_for_qed")
             
         finally:
             coq_interface.close()
             
     except Exception as e:
-        print(f"❌ Test failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+        pytest.fail(f"controller proof failed: {e}")
 
 if __name__ == "__main__":
     print("=" * 70)
@@ -155,7 +152,8 @@ if __name__ == "__main__":
         sys.exit(1)
     
     # Run the test
-    success = test_prove_theorem()
+    test_prove_theorem()
+    success = True
     
     # Final summary
     print(f"\n{'='*70}")
