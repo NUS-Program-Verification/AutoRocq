@@ -518,7 +518,7 @@ class ContextManager:
 
         # Initialize context search
         try:
-            self.context_search = ContextSearch(coq_interface, history_file)
+            self.context_search = ContextSearch(coq_interface)
             self.logger.info(f"✅ Context search initialized successfully")
         except Exception as e:
             self.logger.warning(f"⚠️  Failed to initialize context search: {e}")
