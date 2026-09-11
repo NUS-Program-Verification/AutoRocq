@@ -8,7 +8,7 @@ from agent.proof_tree import ProofTree
 from agent import visualizer
 from utils.recorder import create_proof_recorder
 from utils.logger import clean_ansi_codes, setup_logger
-from utils.coq_utils import hints_from_error, goal_diff
+from utils.coq_utils import hints_from_error
 from utils.config import InteractiveConfig
 
 class ProofController:
@@ -348,18 +348,24 @@ class ProofController:
         consecutive_queries = 0
         consecutive_errors = 0
         error_tactics = []
+        last_tactic_error = None
+        persistent_error_count = 0
 
         def _clear_error_tracking():
             nonlocal consecutive_queries, consecutive_errors, error_tactics
+            nonlocal last_tactic_error, persistent_error_count
             consecutive_queries = 0
             consecutive_errors = 0
             error_tactics.clear()
+            last_tactic_error = None
+            persistent_error_count = 0
 
         tool_call_id = None
         should_optimize = False
         role = "user"
         proof_tree_str = self.proof_tree.get_proof_tree_string()
         prompt = self.context_manager.build_initial_prompt(proof_tree_str)
+        prompt += self._provide_history_feedback()
 
         while self.gen_step_count < self.max_steps:
             if self.global_step_id > self.max_steps * (self.max_context_search + 1):
@@ -465,6 +471,7 @@ class ProofController:
                         f"## CURRENT PROOF TREE:\n{proof_tree_str}\n\n"
                         "Now consider a different approach to complete the proof. Update the plan if needed. Avoid repeating the same tactics that led to this rollback."
                     )
+                    prompt += self._provide_history_feedback()
                     yield {'type': 'rollback', 'success': True, 'distance': rollback_distance}
                 else:
                     prompt = f"Rollback failed: {rollback_result.get('message', 'Unknown error')}\nPlease continue with tactics."
@@ -526,15 +533,25 @@ class ProofController:
                     failed_error = self.coq.get_last_error()
                     self.logger.info(f"⚠️  Step {self.global_step_id}: TACTIC APPLICATION failed")
 
+                    error_key = self._normalize_tactic_error(failed_error)
+                    if error_key and error_key == last_tactic_error:
+                        persistent_error_count += 1
+                    elif error_key:
+                        last_tactic_error = error_key
+                        persistent_error_count = 1
+                    else:
+                        last_tactic_error = None
+                        persistent_error_count = 0
+
                     if consecutive_errors == self.max_errors + 1 and self.enable_hammer:
                         success = self._try_hammer()
 
                     if not success:
-                        prompt += f"Tactic application failed with error: {failed_error}\n"
-                        prompt += hints_from_error(tactic_content, failed_error)
-                        if consecutive_errors > self.max_errors:
-                            prompt += "\nIf errors persist, you may consider using other available tools."
-                        prompt += self._provide_history_feedback(consecutive_errors)
+                        prompt = self._build_failure_feedback(
+                            tactic_content,
+                            failed_error,
+                            persistent_error_count,
+                        )
                         yield {'type': 'tactic', 'tactic': tactic_content, 'success': False,
                                'error': failed_error, 'goals_after': goals_before, 'proof_complete': False}
                         continue
@@ -578,6 +595,7 @@ class ProofController:
                     else:
                         prompt += "Goals: No changes.\n"
                     prompt += f"Hypotheses: {current_hypotheses_after if current_hypotheses_after else 'None'}\n"
+                    prompt += self._provide_history_feedback()
 
                     yield {'type': 'tactic', 'tactic': tactic_content, 'success': True,
                            'error': None, 'goals_after': goals_after_str, 'proof_complete': False}
@@ -637,7 +655,8 @@ class ProofController:
                 hypotheses_before=state['hypotheses_before'],
                 hypotheses_after=state['hypotheses_after'],
                 theorem_name=self.current_theorem_name,
-                step_number=state['step_number']
+                step_number=state['step_number'],
+                source=state.get('source', 'agent'),
             )
 
     def _handle_successful_tactic(self, successful_tactic, subgoals_before, subgoals_after, goals_before, goals_after, hypotheses_before, hypotheses_after) -> Dict[str, Any]:
@@ -899,11 +918,56 @@ class ProofController:
             }
 
 
-    def _provide_history_feedback(self, consecutive_errors: int) -> str:
-        # Add suggestions from history ONCE per proof state
+    @staticmethod
+    def _normalize_tactic_error(error: str) -> str:
+        """Normalize diagnostics so an error streak tracks the same failure."""
+        return " ".join(clean_ansi_codes(error or "").split())
+
+    def _build_failure_feedback(
+        self,
+        tactic: str,
+        error: str,
+        persistent_error_count: int,
+    ) -> str:
+        """Build the Section 4.3 feedback for one failed tactic."""
+        if self.enable_error_feedback:
+            prompt = (
+                f"The previous tactic failed to apply.\n"
+                f"Tactic: {tactic}\n"
+                f"Rocq error: {error}\n"
+            )
+            prompt += hints_from_error(tactic, error)
+        else:
+            prompt = "A tactic was rejected. Generate a different action.\n"
+
+        proof_tree_str = self.proof_tree.get_proof_tree_string()
+        prompt += f"\n## CURRENT PROOF TREE:\n{proof_tree_str}\n"
+
+        context_search_enabled = getattr(
+            self.context_manager,
+            "enable_context_search",
+            True,
+        )
+        if (
+            self.enable_error_feedback
+            and context_search_enabled
+            and persistent_error_count >= self.max_errors
+        ):
+            prompt += (
+                "\n## PERSISTENT ERROR\n"
+                f"The same Rocq error has persisted for "
+                f"{persistent_error_count} consecutive occurrences. "
+                "Analyze the failed attempts and current proof tree, then "
+                "call the `query` tool to retrieve the missing context before "
+                "trying another tactic.\n"
+            )
+
+        prompt += self._provide_history_feedback()
+        return prompt
+
+    def _provide_history_feedback(self) -> str:
+        """Render the top-five complete historical transitions for a decision."""
         if not self.context_manager.enable_history_context:
-            return ""
-        if consecutive_errors != self.max_errors + 1:
             return ""
         if not self.coq.get_goal_str():
             return ""
@@ -914,14 +978,25 @@ class ProofController:
         # Suggest similar tactics
         similar_proof_states = self.context_manager.get_similar_history(clean_goal_str, n=5)
         if similar_proof_states:
-            feedback += "\nHere are some tactics found in history, formatted as '<id>. <tactic> \\n <proof goal diff>':\n\n"
+            feedback += "\n\n## TOP-5 HISTORICAL TACTICS\n"
             for i, entry in enumerate(similar_proof_states, 1):
                 tactic = clean_ansi_codes(str(entry.get('tactic', 'Unknown'))).strip()
                 if tactic in ('', '{', '}', 'Unknown'):
                     continue
-                goals_before = clean_ansi_codes(str(entry.get('goals_before', '')))
-                diff_str = goal_diff(clean_goal_str, goals_before)
-                feedback += f"   {i}. {tactic}\n{diff_str[:100]}{'...' if len(diff_str) > 100 else ''}\n"
+                feedback += f"\n{i}. Tactic: {tactic}\n"
+                feedback += f"   Theorem: {entry.get('theorem_name', '')}\n"
+                feedback += f"   Step: {entry.get('step_number', '')}\n"
+                feedback += f"   Source: {entry.get('source', '')}\n"
+                feedback += f"   Goals before: {entry.get('goals_before', '')}\n"
+                feedback += f"   Goals after: {entry.get('goals_after', '')}\n"
+                feedback += (
+                    f"   Hypotheses before: "
+                    f"{entry.get('hypotheses_before', '') or 'None'}\n"
+                )
+                feedback += (
+                    f"   Hypotheses after: "
+                    f"{entry.get('hypotheses_after', '') or 'None'}\n"
+                )
 
         return feedback
 
