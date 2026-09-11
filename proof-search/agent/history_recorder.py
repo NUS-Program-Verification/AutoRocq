@@ -106,24 +106,33 @@ class TacticHistoryManager:
         tactic: str, 
         goals_before: str, 
         goals_after: str, 
-        theorem_name: str
+        theorem_name: str,
+        hypotheses_before: str = "",
+        hypotheses_after: str = "",
     ) -> str:
         """Create a unique signature for a tactic entry to detect duplicates.
         
-        Only treat as duplicate when tactic, goals_before, AND goals_after are all identical.
-        Same tactics with different proof states should be saved separately.
+        Only treat entries as duplicates when their complete proof context and
+        theorem provenance are identical.
         """
         try:
             # Normalize inputs by stripping whitespace and converting to lowercase
             tactic_clean = tactic.strip().lower()
             goals_before_clean = goals_before.strip().lower()
             goals_after_clean = goals_after.strip().lower()
-            
-            # Create signature based on ALL THREE key fields (excluding theorem_name)
-            # We don't include theorem_name because the same tactic+states might appear
-            # in different theorems and should still be considered duplicates
-            signature = f"{tactic_clean}|||{goals_before_clean}|||{goals_after_clean}"
-            
+            hypotheses_before_clean = hypotheses_before.strip().lower()
+            hypotheses_after_clean = hypotheses_after.strip().lower()
+            theorem_name_clean = theorem_name.strip().lower()
+
+            signature = "|||".join([
+                tactic_clean,
+                goals_before_clean,
+                goals_after_clean,
+                hypotheses_before_clean,
+                hypotheses_after_clean,
+                theorem_name_clean,
+            ])
+
             return signature
             
         except Exception as e:
@@ -144,12 +153,19 @@ class TacticHistoryManager:
     ):
         """Add a successful tactic to history, avoiding duplicates.
         
-        Only skips entries when tactic, goals_before, AND goals_after are all identical.
-        Same tactics with different proof states are saved as separate entries.
+        Only skips entries when the tactic, complete before/after state, and
+        theorem provenance are identical.
         """
         try:
             # Create tactic signature for duplicate checking
-            signature = self._create_tactic_signature(tactic, goals_before, goals_after, theorem_name)
+            signature = self._create_tactic_signature(
+                tactic,
+                goals_before,
+                goals_after,
+                theorem_name,
+                hypotheses_before,
+                hypotheses_after,
+            )
             
             # Check for duplicate using the signature set (O(1) lookup)
             if signature in self._tactic_signatures:
@@ -360,7 +376,9 @@ class TacticHistoryManager:
                     entry.tactic,
                     entry.goals_before, 
                     entry.goals_after,
-                    entry.theorem_name
+                    entry.theorem_name,
+                    entry.hypotheses_before,
+                    entry.hypotheses_after,
                 )
                 self._tactic_signatures.add(signature)
 
@@ -427,7 +445,7 @@ class TacticHistoryManager:
             n: Number of top similar entries to return
             
         Returns:
-            List of dictionaries containing tactic, goals_before, goals_after
+            Complete historical state transitions ordered by similarity.
         """
         try:
             if not self.entries or not current_proof_state:
@@ -480,6 +498,11 @@ class TacticHistoryManager:
                     "tactic": entry.tactic,
                     "goals_before": entry.goals_before,
                     "goals_after": entry.goals_after,
+                    "hypotheses_before": entry.hypotheses_before,
+                    "hypotheses_after": entry.hypotheses_after,
+                    "theorem_name": entry.theorem_name,
+                    "step_number": entry.step_number,
+                    "source": entry.source,
                     "similarity_score": round(similarity, 3)  # For debugging, can be removed
                 })
             
