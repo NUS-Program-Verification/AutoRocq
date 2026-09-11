@@ -8,6 +8,8 @@ free of credentials or network calls.
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import pytest
+
 from agent.proof_controller import ProofController
 
 
@@ -90,6 +92,23 @@ class SequencedCoq(RejectingCoq):
         return {"is_complete": False, "qed_already_applied": False}
 
 
+class GoalChangingCoq(SequencedCoq):
+    def __init__(self):
+        super().__init__([(True, None)])
+        self.goal = "target"
+
+    def get_goal_str(self):
+        return self.goal
+
+    def get_subgoals(self):
+        return [self.goal]
+
+    def apply_tactic(self, tactic_text):
+        success = super().apply_tactic(tactic_text)
+        self.goal = "next target"
+        return success
+
+
 class StaticProofTree:
     @staticmethod
     def get_proof_tree_string():
@@ -150,19 +169,29 @@ def test_one_rocq_error_returns_the_tactic_diagnostic_and_current_tree():
     assert "## CURRENT PROOF TREE:\n" + TREE in feedback
 
 
-def test_disabling_error_feedback_hides_the_diagnostic_but_not_tree_awareness():
+def test_disabling_error_feedback_hides_diagnostics_and_error_escalation_only():
+    error = "The reference missing_lemma was not found"
     controller = make_controller(
-        [tactic("apply missing_lemma"), give_up()],
-        ["The reference missing_lemma was not found"],
+        [
+            tactic("apply candidate_one"),
+            tactic("apply candidate_two"),
+            tactic("apply candidate_three"),
+            give_up(),
+        ],
+        [error, error, error],
         feedback=False,
     )
 
     run(controller)
 
-    feedback = controller.context_manager.prompts[1]
-    assert "missing_lemma" not in feedback
-    assert "was not found" not in feedback
-    assert "## CURRENT PROOF TREE:\n" + TREE in feedback
+    failure_feedback = controller.context_manager.prompts[1:]
+    assert all("missing_lemma" not in prompt for prompt in failure_feedback)
+    assert all("was not found" not in prompt for prompt in failure_feedback)
+    assert all("## PERSISTENT ERROR" not in prompt for prompt in failure_feedback)
+    assert all(
+        "## CURRENT PROOF TREE:\n" + TREE in prompt
+        for prompt in failure_feedback
+    )
 
 
 def test_three_repeats_of_the_same_error_request_context_then_return_its_result():
@@ -187,6 +216,48 @@ def test_three_repeats_of_the_same_error_request_context_then_return_its_result(
     assert "## CURRENT PROOF TREE:\n" + TREE in escalation
     assert controller.query_commands == ["Search (_ <= Z.abs _)."]
     assert "query result" in controller.context_manager.prompts[4]
+
+
+@pytest.mark.parametrize("threshold", [1, 3, 5])
+def test_context_search_starts_at_the_configured_same_error_threshold(threshold):
+    error = "The reference needed_lemma was not found"
+    controller = make_controller(
+        [tactic(f"apply candidate_{index}") for index in range(threshold)]
+        + [give_up()],
+        [error] * threshold,
+    )
+    controller.max_errors = threshold
+
+    run(controller)
+
+    failure_feedback = controller.context_manager.prompts[1:threshold + 1]
+    assert all(
+        "## PERSISTENT ERROR" not in prompt
+        for prompt in failure_feedback[:-1]
+    )
+    assert "## PERSISTENT ERROR" in failure_feedback[-1]
+    assert f"{threshold} consecutive occurrences" in failure_feedback[-1]
+
+
+def test_persistent_errors_do_not_request_an_unavailable_query_tool():
+    error = "The reference needed_lemma was not found"
+    controller = make_controller(
+        [
+            tactic("apply candidate_one"),
+            tactic("apply candidate_two"),
+            tactic("apply candidate_three"),
+            give_up(),
+        ],
+        [error, error, error],
+    )
+    controller.context_manager.enable_context_search = False
+
+    run(controller)
+
+    assert all(
+        "## PERSISTENT ERROR" not in prompt
+        for prompt in controller.context_manager.prompts
+    )
 
 
 def test_different_errors_do_not_masquerade_as_one_persistent_error():
@@ -279,6 +350,38 @@ def test_top_five_complete_history_records_are_in_the_initial_decision_context()
         assert f"Step: {index}" in initial
     assert "historical_5." not in initial
     assert controller.context_manager.history_requests == [("target", 5)]
+
+
+def test_top_five_history_is_recomputed_after_the_goal_changes():
+    record = {
+        "tactic": "historical.",
+        "goals_before": "old goal",
+        "goals_after": "new goal",
+        "hypotheses_before": "H: before",
+        "hypotheses_after": "H: after",
+        "theorem_name": "historical_theorem",
+        "step_number": 1,
+        "source": "agent",
+    }
+    controller = make_controller([tactic("progress"), give_up()], [], history=[record])
+    controller.coq = GoalChangingCoq()
+    controller._handle_successful_tactic = lambda *args: {
+        "tactic": args[0],
+        "goals_before": args[3],
+        "goals_after": args[4],
+        "hypotheses_before": args[5],
+        "hypotheses_after": args[6],
+        "step_number": controller.global_step_id,
+    }
+
+    run(controller)
+
+    assert controller.context_manager.history_requests == [
+        ("target", 5),
+        ("next target", 5),
+    ]
+    assert "historical." in controller.context_manager.prompts[0]
+    assert "historical." in controller.context_manager.prompts[1]
 
 
 def test_successful_proof_records_the_complete_state_transition():
