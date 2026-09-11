@@ -115,6 +115,24 @@ def test_same_goal_transition_in_different_local_contexts_is_not_deduplicated(tm
     assert len(manager.entries) == 2
 
 
+def test_same_transition_in_different_theorems_keeps_both_provenances(tmp_path):
+    manager = TacticHistoryManager(str(tmp_path / "theorem_history.json"))
+
+    for theorem_name in ["first_theorem", "second_theorem"]:
+        manager.add_successful_tactic(
+            tactic="reflexivity.",
+            goals_before="x = x",
+            goals_after="",
+            theorem_name=theorem_name,
+            step_number=1,
+        )
+
+    assert [entry.theorem_name for entry in manager.entries] == [
+        "first_theorem",
+        "second_theorem",
+    ]
+
+
 def test_nothing_to_match_against_returns_nothing(manager, tmp_path):
     assert manager.get_similar_history("", n=5) == [], "an empty goal matched something"
 
