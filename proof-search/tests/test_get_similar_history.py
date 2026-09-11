@@ -83,9 +83,36 @@ def test_results_are_capped_and_ordered_by_score(manager):
 def test_each_result_carries_the_fields_the_prompt_needs(manager):
     entry = manager.get_similar_history("0 <= Z.abs i", n=1)[0]
 
-    assert set(entry) == {"tactic", "goals_before", "goals_after", "similarity_score"}
+    assert set(entry) == {
+        "tactic",
+        "goals_before",
+        "goals_after",
+        "hypotheses_before",
+        "hypotheses_after",
+        "theorem_name",
+        "step_number",
+        "source",
+        "similarity_score",
+    }
     assert entry["goals_before"] == "0 <= Z.abs i"
     assert entry["goals_after"] == "goal after 0"
+
+
+def test_same_goal_transition_in_different_local_contexts_is_not_deduplicated(tmp_path):
+    manager = TacticHistoryManager(str(tmp_path / "contextual_history.json"))
+
+    for hypothesis in ["H: P", "H: Q"]:
+        manager.add_successful_tactic(
+            tactic="assumption.",
+            goals_before="R",
+            goals_after="",
+            hypotheses_before=hypothesis,
+            hypotheses_after=hypothesis,
+            theorem_name="context_sensitive",
+            step_number=1,
+        )
+
+    assert len(manager.entries) == 2
 
 
 def test_nothing_to_match_against_returns_nothing(manager, tmp_path):

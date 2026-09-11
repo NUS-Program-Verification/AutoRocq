@@ -1,0 +1,252 @@
+"""Executable contracts for AutoRocq paper Section 4.3.
+
+These tests use a scripted decision source, not an LLM API.  They exercise the
+same ProofController loop while keeping ordinary pytest runs deterministic and
+free of credentials or network calls.
+"""
+
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+from agent.proof_controller import ProofController
+
+
+TREE = "0. Proof.\n   Goal: target\n   Status: Open"
+
+
+class ScriptedContextManager:
+    def __init__(self, decisions, history=None, query_result="query result"):
+        self.decisions = list(decisions)
+        self.history = list(history or [])
+        self.query_result = query_result
+        self.prompts = []
+        self.history_requests = []
+        self.enable_history_context = bool(history)
+        self.chat_session = SimpleNamespace(messages=[], current_plan="")
+
+    def build_initial_prompt(self, _proof_tree):
+        return "initial context"
+
+    def get_action(self, prompt, **_kwargs):
+        self.prompts.append(prompt)
+        return self.decisions.pop(0), f"call-{len(self.prompts)}"
+
+    @staticmethod
+    def get_tactic(tactic, _tool_call_id):
+        return tactic if tactic.endswith(".") else tactic + "."
+
+    def handle_query_call(self, query, _tool_call_id):
+        return f"Query executed: {query}\n\n{self.query_result}", True
+
+    def handle_plan_call(self, plan, _tool_call_id):
+        self.chat_session.current_plan = plan
+        return "plan recorded"
+
+    def should_give_up(self):
+        return "give up" in self.chat_session.current_plan
+
+    def get_similar_history(self, proof_state, n=5):
+        self.history_requests.append((proof_state, n))
+        return self.history[:n]
+
+
+class RejectingCoq:
+    def __init__(self, errors):
+        self.errors = list(errors)
+        self.last_error = None
+        self.proof = SimpleNamespace(steps=[SimpleNamespace(step="Proof.")])
+
+    def get_goal_str(self):
+        return "target"
+
+    def get_hypothesis(self):
+        return "H: premise"
+
+    def get_subgoals(self):
+        return ["target"]
+
+    def apply_tactic(self, _tactic):
+        self.last_error = self.errors.pop(0)
+        return False
+
+    def get_last_error(self):
+        return self.last_error
+
+
+class StaticProofTree:
+    @staticmethod
+    def get_proof_tree_string():
+        return TREE
+
+
+def tactic(command):
+    return {"type": "tactic", "content": command}
+
+
+def query(command):
+    return {"type": "query", "content": command}
+
+
+def give_up():
+    return {"type": "plan", "content": "give up"}
+
+
+def make_controller(decisions, errors, *, feedback=True, history=None):
+    controller = ProofController.__new__(ProofController)
+    controller.logger = Mock()
+    controller.context_manager = ScriptedContextManager(decisions, history)
+    controller.coq = RejectingCoq(errors)
+    controller.proof_tree = StaticProofTree()
+    controller.max_steps = 10
+    controller.max_errors = 3
+    controller.max_context_search = 3
+    controller.enable_error_feedback = feedback
+    controller.enable_hammer = False
+    controller.gen_step_count = 0
+    controller.global_step_id = 0
+    controller.steps_since_restart = 0
+    controller.successful_tactics = []
+    controller.failed_tactics = []
+    controller.query_commands = []
+    controller._pending_hints = []
+    controller._tactics_with_states = []
+    controller.is_successful = False
+    controller.give_up = False
+    return controller
+
+
+def run(controller):
+    return list(controller.step_generator())
+
+
+def test_one_rocq_error_returns_the_tactic_diagnostic_and_current_tree():
+    controller = make_controller(
+        [tactic("apply missing_lemma"), give_up()],
+        ["The reference missing_lemma was not found"],
+    )
+
+    run(controller)
+
+    feedback = controller.context_manager.prompts[1]
+    assert "apply missing_lemma." in feedback
+    assert "The reference missing_lemma was not found" in feedback
+    assert "## CURRENT PROOF TREE:\n" + TREE in feedback
+
+
+def test_disabling_error_feedback_hides_the_diagnostic_but_not_tree_awareness():
+    controller = make_controller(
+        [tactic("apply missing_lemma"), give_up()],
+        ["The reference missing_lemma was not found"],
+        feedback=False,
+    )
+
+    run(controller)
+
+    feedback = controller.context_manager.prompts[1]
+    assert "missing_lemma" not in feedback
+    assert "was not found" not in feedback
+    assert "## CURRENT PROOF TREE:\n" + TREE in feedback
+
+
+def test_three_repeats_of_the_same_error_request_context_then_return_its_result():
+    error = "The reference needed_lemma was not found"
+    controller = make_controller(
+        [
+            tactic("apply candidate_one"),
+            tactic("apply candidate_two"),
+            tactic("apply candidate_three"),
+            query("Search (_ <= Z.abs _)."),
+            give_up(),
+        ],
+        [error, error, error],
+    )
+
+    run(controller)
+
+    escalation = controller.context_manager.prompts[3]
+    assert "## PERSISTENT ERROR" in escalation
+    assert "3 consecutive occurrences" in escalation
+    assert "call the `query` tool" in escalation
+    assert "## CURRENT PROOF TREE:\n" + TREE in escalation
+    assert controller.query_commands == ["Search (_ <= Z.abs _)."]
+    assert "query result" in controller.context_manager.prompts[4]
+
+
+def test_different_errors_do_not_masquerade_as_one_persistent_error():
+    controller = make_controller(
+        [
+            tactic("apply first"),
+            tactic("apply second"),
+            tactic("apply third"),
+            give_up(),
+        ],
+        ["unknown first", "type mismatch", "unknown third"],
+    )
+
+    run(controller)
+
+    assert all(
+        "## PERSISTENT ERROR" not in prompt
+        for prompt in controller.context_manager.prompts
+    )
+
+
+def test_top_five_complete_history_records_are_in_the_initial_decision_context():
+    records = [
+        {
+            "tactic": f"historical_{index}.",
+            "goals_before": f"goal before {index}",
+            "goals_after": f"goal after {index}",
+            "hypotheses_before": f"H{index}: before",
+            "hypotheses_after": f"H{index}: after",
+            "theorem_name": f"theorem_{index}",
+            "step_number": index,
+            "source": "agent",
+            "similarity_score": 1.0 - index / 10,
+        }
+        for index in range(6)
+    ]
+    controller = make_controller([give_up()], [], history=records)
+
+    run(controller)
+
+    initial = controller.context_manager.prompts[0]
+    assert "## TOP-5 HISTORICAL TACTICS" in initial
+    for index in range(5):
+        assert f"historical_{index}." in initial
+        assert f"goal before {index}" in initial
+        assert f"goal after {index}" in initial
+        assert f"H{index}: before" in initial
+        assert f"H{index}: after" in initial
+        assert f"theorem_{index}" in initial
+        assert f"Step: {index}" in initial
+    assert "historical_5." not in initial
+    assert controller.context_manager.history_requests == [("target", 5)]
+
+
+def test_successful_proof_records_the_complete_state_transition():
+    captured = []
+    controller = ProofController.__new__(ProofController)
+    controller.current_theorem_name = "paper_example"
+    controller.context_manager = SimpleNamespace(
+        tactic_history=SimpleNamespace(
+            add_successful_tactic=lambda **entry: captured.append(entry)
+        )
+    )
+    state = {
+        "tactic": "assumption.",
+        "goals_before": "P",
+        "goals_after": "",
+        "hypotheses_before": "HP: P",
+        "hypotheses_after": "HP: P",
+        "step_number": 4,
+    }
+
+    controller._record_successful_proof([state])
+
+    assert captured == [
+        {
+            **state,
+            "theorem_name": "paper_example",
+        }
+    ]
