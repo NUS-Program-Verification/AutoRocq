@@ -1,4 +1,5 @@
 import os
+import re
 
 from pathlib import Path
 from typing import Dict, Optional, Any, List
@@ -646,9 +647,9 @@ class ProofController:
         Returns all the information about the tactic application as a dictionary.
         """
         try:
-            self.successful_tactics.append(successful_tactic)
             # Update proof tree
             tactic_with_state = self._update_proof_tree(subgoals_before, subgoals_after, successful_tactic, goals_before, goals_after, hypotheses_before, hypotheses_after)
+            self.successful_tactics.append(successful_tactic)
             # Update in recorder
             if self.enable_recording and self.recorder:
                 self.recorder.update_proof_statistics(
@@ -670,41 +671,74 @@ class ProofController:
         Returns the tactic_with_state dictionary.
         """
         try:
-            # Helper function to convert Goal object to string
-            def goal_to_str(goal) -> str:
-                """Convert Goal object to string for comparison."""
-                if hasattr(goal, 'ty'):
-                    return str(goal.ty).strip()
-                elif isinstance(goal, str):
-                    return goal.strip()
-                else:
-                    return str(goal).strip()
-                     
-            creates_branching = len(subgoals_after) > len(subgoals_before)
+            if not self.proof_tree.open_subgoals:
+                self.logger.warning(
+                    f"⚠️  No open subgoals to attach tactic [{successful_tactic}] to. Skipping node addition."
+                )
+            elif (
+                re.match(
+                    r"^\s*(?:cycle\b|focus\s+\d+\b|unfocus\b)",
+                    successful_tactic,
+                    re.IGNORECASE,
+                )
+                or re.fullmatch(
+                    r"\s*(?:\d+\s*:\s*)?[{}]\s*\.?\s*",
+                    successful_tactic,
+                )
+            ):
+                self.proof_tree.reorder_open_subgoals(subgoals_after)
+            elif re.match(r"^\s*all\s*:", successful_tactic, re.IGNORECASE):
+                if subgoals_after:
+                    raise ValueError(
+                        "all: is only proof-tree-safe when it closes every open goal"
+                    )
+                for target_index in reversed(range(len(self.proof_tree.open_subgoals))):
+                    self.proof_tree.attach_to_correct_subgoal(
+                        tactic=successful_tactic,
+                        goals_before=goals_before,
+                        goals_after="",
+                        hypotheses_before=hypotheses_before,
+                        hypotheses_after="",
+                        step_number=self.global_step_id,
+                        subgoals_before=subgoals_before,
+                        subgoals_after=subgoals_after,
+                        target_index=target_index,
+                        replacement_subgoals=[],
+                    )
+            else:
+                selector = re.match(r"^\s*(\d+)\s*:", successful_tactic)
+                target_index = int(selector.group(1)) - 1 if selector else 0
+                if not 0 <= target_index < len(subgoals_before):
+                    raise ValueError(f"Invalid goal selector index {target_index + 1}")
 
-            if creates_branching:
-                if self.proof_tree.open_subgoals:
-                    self.logger.debug(f"🌳 Branching tactic detected: {len(subgoals_before)} -> {len(subgoals_after)} subgoals")
-                    # Add branching node with intermediate subgoal nodes
-                    node = self.proof_tree.add_branching_node(
+                before_signatures = [
+                    self.proof_tree.format_goal(goal) for goal in subgoals_before
+                ]
+                after_signatures = [
+                    self.proof_tree.format_goal(goal) for goal in subgoals_after
+                ]
+                prefix = before_signatures[:target_index]
+                suffix = before_signatures[target_index + 1:]
+                if after_signatures[:target_index] != prefix:
+                    raise ValueError("Tactic changed goals before its selected goal")
+                if suffix and after_signatures[-len(suffix):] != suffix:
+                    raise ValueError("Tactic changed goals after its selected goal")
+
+                replacement_end = len(subgoals_after) - len(suffix)
+                replacement_subgoals = subgoals_after[target_index:replacement_end]
+                if len(replacement_subgoals) > 1:
+                    self.proof_tree.add_branching_node(
                         tactic=successful_tactic,
                         goals_before=goals_before,
                         goals_after=goals_after.strip() if goals_after else '',
                         hypotheses_before=hypotheses_before,
                         hypotheses_after=hypotheses_after.strip() if hypotheses_after else '',
                         step_number=self.global_step_id,
-                        subgoals=subgoals_after
+                        subgoals=replacement_subgoals,
+                        target_index=target_index,
                     )
-                    self.logger.debug(f"🌳 Added branching node: {len(subgoals_after)} subgoals created")
                 else:
-                    self.logger.warning(f"⚠️  No open subgoals to attach branching tactic [{successful_tactic}] to. Skipping node addition.")
-
-            else:
-                # Regular linear step - attach to correct subgoal
-                if self.proof_tree.open_subgoals:
-                    self.logger.debug(f"🌳 Linear tactic: attaching to correct subgoal")
-                    # Use the smart attachment method
-                    node = self.proof_tree.attach_to_correct_subgoal(
+                    self.proof_tree.attach_to_correct_subgoal(
                         tactic=successful_tactic,
                         goals_before=goals_before,
                         goals_after=goals_after.strip() if goals_after else '',
@@ -712,28 +746,16 @@ class ProofController:
                         hypotheses_after=hypotheses_after.strip() if hypotheses_after else '',
                         step_number=self.global_step_id,
                         subgoals_before=subgoals_before,
-                        subgoals_after=subgoals_after
-                    )                                 
-                else:
-                    # No open subgoals - add as regular node
-                    self.logger.debug(f"🌳 Linear tactic: no open subgoals, adding regular node")
-                    if self.proof_tree.open_subgoals:
-                        node = self.proof_tree.add_node(
-                            tactic=successful_tactic,
-                            goals_before=goals_before,
-                            goals_after=goals_after.strip() if goals_after else '',
-                            hypotheses_before=hypotheses_before,
-                            hypotheses_after=hypotheses_after.strip() if hypotheses_after else '',
-                            step_number=self.global_step_id,
-                            subgoals_after=subgoals_after
-                        )
-                    else:
-                        self.logger.warning(f"⚠️  No open subgoals to attach tactic [{successful_tactic}] to. Skipping node addition.") 
+                        subgoals_after=subgoals_after,
+                        target_index=target_index,
+                        replacement_subgoals=replacement_subgoals,
+                    )
         
         except Exception as tree_error:
             import traceback
             self.logger.error(f"❌ Error updating proof tree: {tree_error}")
             self.logger.error(f"📋 Tree update traceback: {traceback.format_exc()}")
+            raise
         
         # --- End proof tree update ---
         return {
@@ -757,6 +779,30 @@ class ProofController:
 
     def _apply_tactic(self, tactic: str) -> bool:
         """Apply a single tactic to the current proof state."""
+        if re.match(r"^\s*abort\b", tactic, re.IGNORECASE):
+            self.coq.last_error = "Abort is not a proof step and cannot enter the proof tree"
+            return False
+        all_selector = re.match(r"^\s*all\s*:\s*(.*)", tactic, re.IGNORECASE)
+        if all_selector and not re.match(
+            r"^exact\b",
+            all_selector.group(1),
+            re.IGNORECASE,
+        ):
+            self.coq.last_error = (
+                "Only closing 'all: exact ...' tacticals are supported by "
+                "proof-tree tracking"
+            )
+            return False
+        if re.search(
+            r"(?:^|[;.])\s*(?:shelve|shelve_unifiable|unshelve|give_up)\b",
+            tactic,
+            re.IGNORECASE,
+        ):
+            self.coq.last_error = (
+                "Tactics that hide or restore shelved goals are not supported "
+                "by proof-tree tracking"
+            )
+            return False
         return self.coq.apply_tactic(tactic)
    
     def _execute_rollback(self, successful_tactics_with_states: List[Dict], reason: str, proof_tree_str: str, rb_steps: int) -> Dict[str, Any]:
@@ -829,7 +875,8 @@ class ProofController:
                 proof_tree_str_before = self.proof_tree.get_proof_tree_string()
                 self.logger.debug(f"\n{proof_tree_str_before[:200]}...\n")
                 
-                tree_result = self.proof_tree.delete_subtree_by_step_number(target_step_number)
+                tree_target_step = 0 if target_index == 0 else target_step_number
+                tree_result = self.proof_tree.delete_subtree_by_step_number(tree_target_step)
                 if tree_result:
                     self.logger.debug(f"🌳 Proof tree updated: kept step_number {target_step_number}, removed descendants")
                 else:
@@ -865,6 +912,11 @@ class ProofController:
                     self.logger.debug(f"🔄 Refreshed proof object: now has {len(self.coq.proof.steps)} steps")
                 else:
                     self.logger.warning(f"⚠️ No proof object after rollback refresh")
+
+                if self.proof_tree:
+                    self.proof_tree.reorder_open_subgoals(
+                        self.coq.get_subgoals()
+                    )
             
             # Step 5: Record rollback in recorder if enabled
             if self.enable_recording and self.recorder:

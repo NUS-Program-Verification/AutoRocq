@@ -66,6 +66,41 @@ class ProofTree:
         self.active_node = None
         self.logger = setup_logger("ProofTree")
 
+    @staticmethod
+    def format_goal(goal) -> tuple:
+        """Return one goal's conclusion and local hypotheses."""
+        if hasattr(goal, 'ty'):
+            conclusion = str(goal.ty).strip()
+            hypotheses = "\n".join(
+                f"{', '.join(hyp.names)}: {hyp.ty}"
+                for hyp in getattr(goal, 'hyps', [])
+            )
+            return conclusion, hypotheses
+        if isinstance(goal, str):
+            return goal.strip(), ""
+        return str(goal).strip(), ""
+
+    def reorder_open_subgoals(self, subgoals: list) -> None:
+        """Reorder existing frontier nodes to match a Rocq goal rotation."""
+        remaining = list(self.open_subgoals)
+        reordered = []
+        for subgoal in subgoals:
+            signature = self.format_goal(subgoal)
+            match = next(
+                (
+                    node for node in remaining
+                    if (node.goals_after, node.hypotheses_after) == signature
+                ),
+                None,
+            )
+            if match is None:
+                raise ValueError(f"Cannot match rotated goal {signature[0]!r}")
+            remaining.remove(match)
+            reordered.append(match)
+        if remaining:
+            raise ValueError("Goal rotation dropped frontier nodes")
+        self.open_subgoals = reordered
+
     def add_node(
         self,
         tactic: str,
@@ -90,6 +125,13 @@ class ProofTree:
             step_number=step_number,
             parent=parent
         )
+
+        if parent is None and subgoals_after:
+            conclusion, hypotheses = self.format_goal(subgoals_after[0])
+            new_node.goals_before = conclusion
+            new_node.goals_after = conclusion
+            new_node.hypotheses_before = hypotheses
+            new_node.hypotheses_after = hypotheses
         
         if parent is None:
             # This is the root node
@@ -116,74 +158,22 @@ class ProofTree:
         hypotheses_before: str,
         hypotheses_after: str,
         step_number: int,
-        subgoals: list
+        subgoals: list,
+        target_index: int = 0,
     ) -> Optional['ProofTreeNode']:
         """
         Add a branching node that creates multiple subgoals.
-        Each subgoal extracts ONLY its conclusion (the final goal to prove),
-        not the full forall/let context.
+        Each child retains the complete goal expression and its hypotheses.
         """
         if not self.open_subgoals:
             self.logger.warning("No open subgoals to branch from")
             return None
         
-        parent_subgoal = self.open_subgoals[0]
+        parent_subgoal = self.open_subgoals[target_index]
         
         if not isinstance(parent_subgoal, ProofTreeNode):
             self.logger.error(f"❌ Parent subgoal is not a ProofTreeNode! Type: {type(parent_subgoal)}")
             raise TypeError(f"Expected ProofTreeNode but got {type(parent_subgoal)}")
-        
-        def extract_goal_conclusion(goal) -> tuple:
-            """
-            Extract ONLY the final conclusion to prove, stripping forall/let bindings.
-            
-            For example, from:
-              forall x y, let z := x + y in P(z)
-            Extract only:
-              P(z)
-            
-            Returns: (conclusion_str, hypotheses_str)
-            """
-            if hasattr(goal, 'ty'):
-                goal_full = str(goal.ty).strip()
-                
-                # Extract hypotheses
-                hyps_str = ""
-                if hasattr(goal, 'hyps') and goal.hyps:
-                    hyps_lines = []
-                    for hyp in goal.hyps:
-                        if hasattr(hyp, 'names') and hasattr(hyp, 'ty'):
-                            names_str = ', '.join(hyp.names)
-                            hyps_lines.append(f"{names_str}: {hyp.ty}")
-                    hyps_str = '\n'.join(hyps_lines)
-                
-                # Parse the goal to extract conclusion
-                # Strategy: Look for the final '->' or just use the whole thing if no arrows
-                
-                # Split by '->' to find the conclusion (last part)
-                parts = goal_full.split('->')
-                if len(parts) > 1:
-                    # The conclusion is after the last '->'
-                    conclusion = parts[-1].strip()
-                else:
-                    # No '->', the whole thing is the conclusion
-                    conclusion = goal_full
-                
-                # Also handle 'let ... in' constructs
-                # If conclusion starts with 'let', we want what comes after 'in'
-                while conclusion.strip().startswith('let '):
-                    # Find the matching 'in'
-                    in_pos = conclusion.find(' in ')
-                    if in_pos != -1:
-                        conclusion = conclusion[in_pos + 4:].strip()
-                    else:
-                        break
-                
-                return (conclusion, hyps_str)
-            elif isinstance(goal, str):
-                return (goal.strip(), "")
-            else:
-                return (str(goal).strip(), "")
         
         # Create the branching node
         branching_node = ProofTreeNode(
@@ -197,12 +187,11 @@ class ProofTree:
         )
         
         parent_subgoal.children.append(branching_node)
-        self.open_subgoals.remove(parent_subgoal)
         
         # Create child nodes for each new subgoal
         new_subgoal_nodes = []
         for i, subgoal in enumerate(subgoals):
-            goal_conclusion, hyps_str = extract_goal_conclusion(subgoal)
+            goal_conclusion, hyps_str = self.format_goal(subgoal)
             
             self.logger.debug(f"Subgoal {i+1}/{len(subgoals)}:")
             self.logger.debug(f"  Conclusion: {goal_conclusion[:100]}{'...' if len(goal_conclusion) > 100 else ''}")
@@ -222,7 +211,9 @@ class ProofTree:
             branching_node.children.append(subgoal_node)
             new_subgoal_nodes.append(subgoal_node)
         
-        self.open_subgoals.extend(new_subgoal_nodes)
+        # Replace the focused goal in place. Existing background goals must
+        # stay after its children, in the same order reported by CoqPyt.
+        self.open_subgoals[target_index:target_index + 1] = new_subgoal_nodes
         
         for i, node in enumerate(self.open_subgoals):
             if not isinstance(node, ProofTreeNode):
@@ -243,7 +234,9 @@ class ProofTree:
         hypotheses_after: str,
         step_number: int,
         subgoals_before: list,
-        subgoals_after: list
+        subgoals_after: list,
+        target_index: int = 0,
+        replacement_subgoals: Optional[list] = None,
     ) -> Optional['ProofTreeNode']:
         """
         Attach a tactic node to the correct open subgoal by comparing subgoal lists.
@@ -253,8 +246,8 @@ class ProofTree:
             self.logger.warning("No open subgoals to attach to")
             return None
         
-        # IN COQ, WE ALWAYS WORK ON THE FIRST OPEN SUBGOAL
-        target_subgoal = self.open_subgoals[0]
+        # Numeric selectors may target a background goal directly.
+        target_subgoal = self.open_subgoals[target_index]
         
         # VERIFY target_subgoal is a ProofTreeNode
         if not isinstance(target_subgoal, ProofTreeNode):
@@ -265,35 +258,48 @@ class ProofTree:
                 self.logger.error(f"   [{i}] Type: {type(item)}, Content: {item}")
             raise TypeError(f"Expected ProofTreeNode but got {type(target_subgoal)}")
         
-        self.logger.info(f"Attaching tactic to first open subgoal (index 0, total open: {len(self.open_subgoals)})")
+        self.logger.info(
+            f"Attaching tactic to open subgoal index {target_index} "
+            f"(total open: {len(self.open_subgoals)})"
+        )
         
-        # Create and attach the new node
+        if replacement_subgoals is None:
+            focused_goal_completed = len(subgoals_after) < len(subgoals_before)
+            next_goal = None if focused_goal_completed else subgoals_after[0]
+        else:
+            focused_goal_completed = not replacement_subgoals
+            next_goal = None if focused_goal_completed else replacement_subgoals[0]
+        next_conclusion, next_hypotheses = (
+            ("", "") if next_goal is None else self.format_goal(next_goal)
+        )
+
+        # A completed branch has no remaining branch-local goal. The first
+        # goal in the global after-state belongs to the next open branch.
         new_node = ProofTreeNode(
             tactic=tactic,
-            goals_before=goals_before,
-            goals_after=goals_after,
-            hypotheses_before=hypotheses_before,
-            hypotheses_after=hypotheses_after,
+            goals_before=target_subgoal.goals_after,
+            goals_after=next_conclusion,
+            hypotheses_before=target_subgoal.hypotheses_after,
+            hypotheses_after=next_hypotheses,
             step_number=step_number,
-            parent=target_subgoal
+            parent=target_subgoal,
+            status="Proved" if focused_goal_completed else "Applied",
         )
         
         target_subgoal.children.append(new_node)
         
         # Update open subgoals list based on what happened
-        if len(subgoals_after) == 0:
-            # First subgoal was completed - remove it
-            self.open_subgoals.pop(0)
-            self.logger.info(f"First subgoal completed. {len(self.open_subgoals)} open subgoals remaining")
-        elif len(subgoals_after) < len(subgoals_before):
-            # First subgoal was completed - remove it
-            self.open_subgoals.pop(0)
-            self.logger.info(f"First subgoal completed. {len(self.open_subgoals)} open subgoals remaining")
+        if focused_goal_completed:
+            # The selected subgoal was completed - remove it.
+            self.open_subgoals.pop(target_index)
+            self.logger.info(
+                f"Selected subgoal completed. "
+                f"{len(self.open_subgoals)} open subgoals remaining"
+            )
         else:
-            # First subgoal was transformed but not completed
-            # Replace the old open subgoal with the new node
-            self.open_subgoals[0] = new_node
-            self.logger.info(f"First subgoal transformed, updated open subgoals list")
+            # Replace the transformed selected subgoal with its new node.
+            self.open_subgoals[target_index] = new_node
+            self.logger.info("Selected subgoal transformed, updated open subgoals list")
         
         # VERIFY all items in open_subgoals are ProofTreeNode objects after update
         for i, node in enumerate(self.open_subgoals):
@@ -350,8 +356,8 @@ class ProofTree:
         # A leaf node represents an open subgoal that needs work
         def find_leaf_nodes(node: 'ProofTreeNode', leaves: list):
             """Find all leaf nodes in the tree."""
-            if not node.children:
-                # This is a leaf node - it's an open subgoal
+            if not node.children and node.status != "Proved":
+                # A proved tactic is also a leaf, but not an open subgoal.
                 leaves.append(node)
             else:
                 # Recursively check children

@@ -436,9 +436,17 @@ class CoqInterface:
             # Clean the tactic string
             tactic_clean = tactic.strip().replace('\n', '').replace('\r', '')
 
-            # Ensure tactic ends with period (except for { and } which don't need periods)
+            # Ensure tactics end with a period. Structural focus tokens are
+            # complete Rocq sentences without one.
             # Note: } should be applied as ' }' (with leading space, no period)
-            if not tactic_clean.endswith('.') and tactic_clean.strip() not in ['{', '}']:
+            structural_token = (
+                tactic_clean.strip() in ['{', '}', '-', '+', '*']
+                or re.fullmatch(r"\d+\s*:\s*\{", tactic_clean.strip())
+            )
+            if (
+                not tactic_clean.endswith('.')
+                and not structural_token
+            ):
                 tactic_clean += '.'
             
             # Special handling for closing brace: ensure it has a leading space
