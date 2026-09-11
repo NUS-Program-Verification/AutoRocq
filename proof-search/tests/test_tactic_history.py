@@ -75,7 +75,7 @@ def test_added_tactics_survive_a_save_and_reload(tmp_path):
 
 
 def test_only_an_exact_repeat_counts_as_a_duplicate(manager):
-    """The signature is tactic + goals_before + goals_after, nothing else."""
+    """Only the same transition in the same theorem is a duplicate."""
     def add(tactic, before, after, theorem="t"):
         manager.add_successful_tactic(
             tactic=tactic,
@@ -88,21 +88,20 @@ def test_only_an_exact_repeat_counts_as_a_duplicate(manager):
     add("lia.", "0 <= n", "")
     assert len(manager.entries) == 1, "an exact repeat was stored twice"
 
-    # A different theorem is still the same signature.
+    # The theorem name is part of the provenance promised by the paper.
     add("lia.", "0 <= n", "", theorem="other")
-    assert len(manager.entries) == 1, "theorem_name must not enter the signature"
+    assert len(manager.entries) == 2
 
-    # Any of the three fields differing makes it a new entry.
+    # Any part of the transition differing makes it a new entry.
     add("lia.", "0 <= m", "")
     add("nia.", "0 <= n", "")
     add("lia.", "0 <= n", "n = 0", theorem="second")
-    assert len(manager.entries) == 4
+    assert len(manager.entries) == 5
 
     stats = manager.get_statistics()
-    assert stats["total_entries"] == 4
-    assert stats["unique_signatures"] == 4
-    # "other" was deduplicated away, so only "t" and "second" are represented.
-    assert stats["theorems_covered"] == 2
+    assert stats["total_entries"] == 5
+    assert stats["unique_signatures"] == 5
+    assert stats["theorems_covered"] == 3
     assert stats["unique_tactics"] == 2, stats["most_common_tactics"]
 
 

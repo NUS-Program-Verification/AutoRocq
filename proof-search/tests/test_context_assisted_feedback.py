@@ -73,6 +73,23 @@ class RejectingCoq:
         return self.last_error
 
 
+class SequencedCoq(RejectingCoq):
+    def __init__(self, outcomes):
+        super().__init__([])
+        self.outcomes = list(outcomes)
+
+    def apply_tactic(self, tactic):
+        success, error = self.outcomes.pop(0)
+        self.last_error = error
+        if success:
+            self.proof.steps.append(SimpleNamespace(step=tactic))
+        return success
+
+    @staticmethod
+    def get_proof_completion_status():
+        return {"is_complete": False, "qed_already_applied": False}
+
+
 class StaticProofTree:
     @staticmethod
     def get_proof_tree_string():
@@ -191,6 +208,46 @@ def test_different_errors_do_not_masquerade_as_one_persistent_error():
     )
 
 
+def test_a_success_resets_the_persistent_error_streak():
+    error = "The reference needed_lemma was not found"
+    controller = make_controller(
+        [
+            tactic("apply first"),
+            tactic("idtac"),
+            tactic("apply second"),
+            tactic("apply third"),
+            give_up(),
+        ],
+        [],
+    )
+    controller.coq = SequencedCoq([
+        (False, error),
+        (True, None),
+        (False, error),
+        (False, error),
+    ])
+
+    def record_success(tactic_text, _before, _after, goals_before, goals_after,
+                       hypotheses_before, hypotheses_after):
+        return {
+            "tactic": tactic_text,
+            "goals_before": goals_before,
+            "goals_after": goals_after,
+            "hypotheses_before": hypotheses_before,
+            "hypotheses_after": hypotheses_after,
+            "step_number": controller.global_step_id,
+        }
+
+    controller._handle_successful_tactic = record_success
+
+    run(controller)
+
+    assert all(
+        "## PERSISTENT ERROR" not in prompt
+        for prompt in controller.context_manager.prompts
+    )
+
+
 def test_top_five_complete_history_records_are_in_the_initial_decision_context():
     records = [
         {
@@ -240,6 +297,7 @@ def test_successful_proof_records_the_complete_state_transition():
         "hypotheses_before": "HP: P",
         "hypotheses_after": "HP: P",
         "step_number": 4,
+        "source": "user",
     }
 
     controller._record_successful_proof([state])
