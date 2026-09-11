@@ -1,5 +1,6 @@
 from agent.proof_controller import ProofController
 from agent.proof_tree import ProofTree
+from agent.context_manager import ContextManager
 from backend.coq_interface import CoqInterface
 from coqpyt.lsp.structs import Goal
 
@@ -128,6 +129,23 @@ def is_ancestor(ancestor, node):
             return True
         node = node.parent
     return False
+
+
+def test_initial_context_includes_the_current_proof_tree_without_an_llm():
+    class ProofFileContext:
+        @staticmethod
+        def get_proof_file_content():
+            return "Theorem paper_contract : True."
+
+    manager = ContextManager.__new__(ContextManager)
+    manager.coq = ProofFileContext()
+    manager.proof_plan = None
+    manager.extract_essential_proof_content = lambda content: content
+    proof_tree = "0. Proof.\n   Goal: True\n   Status: Open"
+
+    prompt = manager.build_initial_prompt(proof_tree)
+
+    assert "## CURRENT PROOF TREE:\n" + proof_tree in prompt
 
 
 def completed_nested_tree():
