@@ -546,6 +546,8 @@ class ContextManager:
         clean_proof_file_content = clean_ansi_codes(proof_file_content)
         essential_content = self.extract_essential_proof_content(clean_proof_file_content)
         prompt += essential_content + "\n\n"
+
+        prompt += f"## CURRENT PROOF TREE:\n{proof_tree_str}\n\n"
         
         # Initial plan: use proof plan if available
         if self.proof_plan:
