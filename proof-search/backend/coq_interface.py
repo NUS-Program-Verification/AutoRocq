@@ -266,6 +266,33 @@ class CoqInterface:
         self.__cached_goals = current_goals
         self.__goal_cache_filled = True
         return current_goals
+
+    def _open_goal_count(self) -> Optional[int]:
+        """Count goals in CoqPyt's structured current-goal response.
+
+        Focused, background, shelved, and given-up goals all keep a proof from
+        being ready for ``Qed``. ``None`` means the structured state could not
+        be read.
+        """
+        goal_answer = self._get_current_goals_cached()
+        if goal_answer is None:
+            return None
+
+        goal_config = getattr(goal_answer, 'goals', None)
+        if goal_config is None:
+            return None
+
+        count = len(getattr(goal_config, 'goals', None) or [])
+        for before, after in getattr(goal_config, 'stack', None) or []:
+            count += len(before or []) + len(after or [])
+        count += len(getattr(goal_config, 'shelf', None) or [])
+        count += len(getattr(goal_config, 'given_up', None) or [])
+        return count
+
+    def has_open_goals(self) -> bool:
+        """Whether CoqPyt reports any focused, background, or hidden goal."""
+        count = self._open_goal_count()
+        return count is not None and count > 0
     
     def get_raw_goal_str(self):
         """Return the string representation of the current goal."""
@@ -648,21 +675,12 @@ class CoqInterface:
                 self.logger.debug("Found Qed/Defined step")
                 return True
             
-            # Get current goals
-            goals = self.get_goal_str()
-            
-            # Check for "Proof finished" specifically
-            if goals and "proof finished" in goals.lower():
-                self.logger.debug("Found 'Proof finished' indicator")
-                return True
-            
-            if goals and "no more goals, but there are some goals you gave up" in goals.lower():
-                self.logger.debug("Found incomplete proof with given up goals")
-                return False
-            
-            if self._no_goals_left(goals):
+            open_goal_count = self._open_goal_count()
+            if open_goal_count == 0:
                 self.logger.debug("No goals remaining - proof complete")
                 return True
+            if open_goal_count is not None:
+                return False
             
             # Check the proof file's internal state
             try:
@@ -1278,12 +1296,12 @@ class CoqInterface:
             if self._last_step_is_terminator(proof):
                 return True
 
-            goals = self.get_goal_str()
-            if goals and "no more goals, but there are some goals you gave up" in goals.lower():
-                self.logger.debug("Goals were given up - not ready for Qed")
+            open_goal_count = self._open_goal_count()
+            if open_goal_count is None:
+                self.logger.debug("No structured goal state available")
                 return False
 
-            return self._no_goals_left(goals)
+            return open_goal_count == 0
 
         except Exception as e:
             self.logger.error(f"Error checking if ready for Qed: {e}")
