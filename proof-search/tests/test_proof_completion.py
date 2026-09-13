@@ -114,6 +114,15 @@ def test_is_ready_for_qed_predicts_without_acting(coq):
     assert coq.proof.steps[-1].text.strip() == "Qed."
 
 
+def test_completion_uses_the_structured_goal_state(coq, monkeypatch):
+    """Rendered goal text must not override CoqPyt's structured goals."""
+    monkeypatch.setattr(coq, "get_goal_str", lambda: "No more goals.")
+
+    assert coq.has_open_goals()
+    assert not coq.is_ready_for_qed()
+    assert not coq.is_proof_complete()
+
+
 def test_completion_survives_qed(coq):
     """The defect this replaced: completion flipped False exactly when true."""
     close_the_goals(coq)
@@ -194,9 +203,7 @@ def test_a_refused_qed_leaves_the_proof_alone_and_says_why(coq, monkeypatch):
 
     status = coq.get_proof_completion_status()
     assert not status["qed_already_applied"], status
-    assert not (status["is_complete"] and status["qed_already_applied"]), (
-        "an unsaved proof would be reported as finished"
-    )
+    assert status["is_complete"], "the proof body remains goal-free"
 
 
 def test_the_agents_completion_check_fires_only_once_the_proof_is_closed(coq):
