@@ -2,7 +2,7 @@ from agent.proof_controller import ProofController
 from agent.proof_tree import ProofTree
 from agent.context_manager import ContextManager
 from backend.coq_interface import CoqInterface
-from coqpyt.lsp.structs import Goal
+from coqpyt.lsp.structs import Goal, Hyp
 
 
 def make_controller(initial_goal):
@@ -46,10 +46,7 @@ def open_goals(controller):
 
 
 def hypothesis_text(goal):
-    return "\n".join(
-        f"{', '.join(hyp.names)}: {hyp.ty}"
-        for hyp in goal.hyps
-    )
+    return CoqInterface.format_hypotheses(goal)
 
 
 def assert_frontier_matches_coqpyt(controller, interface):
@@ -182,6 +179,17 @@ def test_branch_nodes_preserve_the_complete_goal_expression():
     )
 
     assert open_goals(controller) == ["A -> B", "let x := 1 in x = x"]
+
+
+def test_branch_nodes_preserve_let_bound_hypothesis_values():
+    controller = make_controller("P /\\ True")
+    let_goal = Goal([Hyp(["y"], "bool", "true")], "y = true")
+
+    update(controller, ["P /\\ True"], [let_goal, Goal([], "True")], "split.")
+
+    assert controller.proof_tree.open_subgoals[0].hypotheses_after == (
+        "y := true : bool"
+    )
 
 
 def test_nested_branching_preserves_count_order_and_tactic_attachments():
@@ -431,7 +439,24 @@ def test_all_selector_can_close_every_open_branch(tmp_path):
         interface.close()
 
 
-def test_nonclosing_all_selector_is_rejected_before_it_can_desynchronize(tmp_path):
+def test_all_selector_accepts_any_tactic_that_closes_every_branch(tmp_path):
+    interface, controller = load_live_proof(
+        tmp_path,
+        "all_assumption",
+        "(P Q : Prop) : P -> Q -> P /\\ Q",
+    )
+    try:
+        apply_live(controller, "intros HP HQ.")
+        apply_live(controller, "split.")
+        apply_live(controller, "all: assumption.")
+
+        assert not controller.proof_tree.open_subgoals
+        assert not interface.get_subgoals()
+    finally:
+        interface.close()
+
+
+def test_nonclosing_all_selector_is_reverted_without_desynchronizing(tmp_path):
     interface, controller = load_live_proof(
         tmp_path,
         "unsafe_all",
@@ -670,6 +695,47 @@ def test_inconsistent_selected_goal_transition_is_not_silently_accepted():
 
     assert result is False
     assert open_goals(controller) == ["A", "B"]
+
+
+def test_live_reconciliation_failure_restores_rocq(tmp_path, monkeypatch):
+    interface, controller = load_live_proof(
+        tmp_path,
+        "reconcile_rollback",
+        "(P : Prop) : P -> P",
+    )
+    try:
+        apply_live(controller, "intro HP.")
+        tree_before = controller.proof_tree.to_dict()
+        goals_before = interface.get_goal_str()
+        hypotheses_before = interface.get_hypothesis()
+        subgoals_before = interface.get_subgoals()
+        steps_before = len(interface.proof.steps)
+
+        assert controller._apply_tactic("idtac.")
+        subgoals_after = interface.get_subgoals()
+        def reject_update(*_args):
+            controller.proof_tree.root.children.clear()
+            raise ValueError("bad frontier")
+
+        monkeypatch.setattr(controller, "_update_proof_tree", reject_update)
+
+        result = controller._handle_successful_tactic(
+            "idtac.",
+            subgoals_before,
+            subgoals_after,
+            goals_before,
+            interface.get_goal_str(),
+            hypotheses_before,
+            interface.get_hypothesis(),
+        )
+
+        assert result is False
+        assert len(interface.proof.steps) == steps_before
+        assert interface.get_goal_str() == goals_before
+        assert controller.proof_tree.to_dict() == tree_before
+        assert "reverted" in interface.get_last_error()
+    finally:
+        interface.close()
 
 
 def test_shelving_is_rejected_until_the_tree_can_represent_shelves(tmp_path):
