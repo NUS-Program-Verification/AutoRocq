@@ -267,32 +267,6 @@ class CoqInterface:
         self.__goal_cache_filled = True
         return current_goals
     
-    def has_open_goals(self) -> bool:
-        """Whether any goal is still open.
-
-        `current_goals` is a GoalAnswer, and a GoalAnswer stays truthy after the
-        last goal closes -- `if not current_goals` can only fire when the lookup
-        itself failed, never when the proof is finished, and str() of it is the
-        sentence "No more goals.". The count has to come off the structure:
-        current_goals.goals is a GoalConfig, whose .goals are the focused goals
-        and whose .stack holds the backgrounded ones.
-        """
-        goal_answer = self._get_current_goals_cached()
-        if goal_answer is None:
-            return False
-
-        goal_config = getattr(goal_answer, 'goals', None)
-        if goal_config is None:
-            return False
-
-        stack = getattr(goal_config, 'stack', None) or []
-        return bool(
-            getattr(goal_config, 'goals', None)
-            or any(before or after for before, after in stack)
-            or getattr(goal_config, 'shelf', None)
-            or getattr(goal_config, 'given_up', None)
-        )
-
     def get_raw_goal_str(self):
         """Return the string representation of the current goal."""
         try:
@@ -1458,8 +1432,7 @@ class CoqInterface:
             current_goals = self._get_current_goals_cached()
 
             # `is None` on purpose: a GoalAnswer with no goals left is still
-            # truthy, so `if not current_goals` would never fire here. Whether
-            # any goal remains is has_open_goals()'s question.
+            # truthy, so `if not current_goals` would never fire here.
             if current_goals is None:
                 self.logger.debug("No current goals available")
                 return []
