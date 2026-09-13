@@ -204,7 +204,7 @@ class InteractiveSessionManager:
         goals_before = self.controller.coq.get_goal_str()
         hyps_before = self.controller.coq.get_hypothesis()
 
-        success = self.controller.coq.apply_tactic(tactic)
+        success = self.controller._apply_tactic(tactic)
         if not success:
             error = self.controller.coq.get_last_error()
             self.logger.debug(f"User Tactic failed: {tactic!r} — {error}")
@@ -221,6 +221,9 @@ class InteractiveSessionManager:
             goals_before or '', goals_after or '',
             hyps_before or '', hyps_after or ''
         )
+        if not tactic_with_state:
+            print(f"Tactic reverted: {self.controller.coq.get_last_error()}")
+            return
         tactic_with_state['source'] = 'user'
         self.controller._tactics_with_states.append(tactic_with_state)
         self.logger.debug(f"User Tactic applied: {tactic!r}")

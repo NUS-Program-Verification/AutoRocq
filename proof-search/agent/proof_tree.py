@@ -1,6 +1,7 @@
 import json
 from typing import List, Optional, Dict, Any
 from graphviz import Digraph
+from backend.coq_interface import CoqInterface
 from utils.logger import setup_logger
 
 class ProofTreeNode:
@@ -71,10 +72,7 @@ class ProofTree:
         """Return one goal's conclusion and local hypotheses."""
         if hasattr(goal, 'ty'):
             conclusion = str(goal.ty).strip()
-            hypotheses = "\n".join(
-                f"{', '.join(hyp.names)}: {hyp.ty}"
-                for hyp in getattr(goal, 'hyps', [])
-            )
+            hypotheses = CoqInterface.format_hypotheses(goal)
             return conclusion, hypotheses
         if isinstance(goal, str):
             return goal.strip(), ""

@@ -1,3 +1,4 @@
+import copy
 import os
 import re
 
@@ -555,6 +556,21 @@ class ProofController:
                     tactic_content, subgoals_before, subgoals_after,
                     goals_before, current_goals_after, hypotheses_before, current_hypotheses_after
                 )
+                if not tactic_with_state:
+                    consecutive_errors += 1
+                    error_tactics.append(tactic_content)
+                    self.failed_tactics.append(tactic_content)
+                    failed_error = self.coq.get_last_error()
+                    prompt = f"Tactic application rejected: {failed_error}\n"
+                    yield {
+                        'type': 'tactic',
+                        'tactic': tactic_content,
+                        'success': False,
+                        'error': failed_error,
+                        'goals_after': goals_before,
+                        'proof_complete': False,
+                    }
+                    continue
                 tactic_with_state['source'] = 'agent'
                 self._tactics_with_states.append(tactic_with_state)
 
@@ -646,6 +662,11 @@ class ProofController:
         Handle successful tactic by updating proof tree. 
         Returns all the information about the tactic application as a dictionary.
         """
+        tree_snapshot = copy.deepcopy((
+            self.proof_tree.root,
+            self.proof_tree.open_subgoals,
+            self.proof_tree.active_node,
+        ))
         try:
             # Update proof tree
             tactic_with_state = self._update_proof_tree(subgoals_before, subgoals_after, successful_tactic, goals_before, goals_after, hypotheses_before, hypotheses_after)
@@ -663,6 +684,18 @@ class ProofController:
             
         except Exception as e:
             self.logger.error(f"❌ Error handling successful tactic: {e}")
+            (
+                self.proof_tree.root,
+                self.proof_tree.open_subgoals,
+                self.proof_tree.active_node,
+            ) = tree_snapshot
+            proof = getattr(self.coq, 'proof', None) if hasattr(self, 'coq') else None
+            if proof is not None and proof.steps:
+                self._restore_coq_step_count(len(proof.steps) - 1)
+                self.coq.last_error = (
+                    "Tactic was reverted because its goal transition could not "
+                    f"be represented safely: {e}"
+                )
             return False
 
     def _update_proof_tree(self, subgoals_before, subgoals_after, successful_tactic, goals_before, goals_after, hypotheses_before, hypotheses_after) -> Dict[str, Any]:
@@ -782,17 +815,6 @@ class ProofController:
         if re.match(r"^\s*abort\b", tactic, re.IGNORECASE):
             self.coq.last_error = "Abort is not a proof step and cannot enter the proof tree"
             return False
-        all_selector = re.match(r"^\s*all\s*:\s*(.*)", tactic, re.IGNORECASE)
-        if all_selector and not re.match(
-            r"^exact\b",
-            all_selector.group(1),
-            re.IGNORECASE,
-        ):
-            self.coq.last_error = (
-                "Only closing 'all: exact ...' tacticals are supported by "
-                "proof-tree tracking"
-            )
-            return False
         if re.search(
             r"(?:^|[;.])\s*(?:shelve|shelve_unifiable|unshelve|give_up)\b",
             tactic,
@@ -803,7 +825,38 @@ class ProofController:
                 "by proof-tree tracking"
             )
             return False
-        return self.coq.apply_tactic(tactic)
+
+        all_selector = re.match(r"^\s*all\s*:", tactic, re.IGNORECASE)
+        proof = getattr(self.coq, 'proof', None)
+        step_count = len(proof.steps) if proof is not None else 0
+        success = self.coq.apply_tactic(tactic)
+        if not success or not all_selector:
+            return success
+
+        if not self.coq.get_subgoals():
+            return True
+
+        self._restore_coq_step_count(step_count)
+        self.coq.last_error = (
+            "The 'all:' tactical was reverted because it did not close every "
+            "open goal"
+        )
+        return False
+
+    def _restore_coq_step_count(self, target_count: int) -> None:
+        """Pop accepted steps until Rocq returns to ``target_count``."""
+        proof = getattr(self.coq, 'proof', None) or self.coq.get_unproven_proof()
+        if proof is None:
+            raise RuntimeError("Cannot restore Rocq state without an active proof")
+
+        while len(proof.steps) > target_count:
+            self.coq.proof_file.pop_step(proof)
+        if len(proof.steps) != target_count:
+            raise RuntimeError(
+                f"Could not restore Rocq to {target_count} proof steps"
+            )
+        self.coq.proof = proof
+        self.coq._invalidate_goal_caches()
    
     def _execute_rollback(self, successful_tactics_with_states: List[Dict], reason: str, proof_tree_str: str, rb_steps: int) -> Dict[str, Any]:
         """
