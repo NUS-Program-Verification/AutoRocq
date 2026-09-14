@@ -102,8 +102,10 @@ def test_a_full_proof_runs_through_to_qed(coq):
 
 @pytest.mark.xfail(
     strict=True,
-    reason="is_proof_complete() reads unproven_proofs[0], which Qed removes, so it "
-    "returns False exactly when the proof is complete",
+    reason="on main, is_proof_complete() resolves the proof through "
+    "get_unproven_proof(), which Qed empties, so it returns False exactly when "
+    "the proof is complete. Fixed on tests-real-assertions (_current_proof); "
+    "drop this marker when that lands.",
 )
 def test_is_proof_complete_reports_a_closed_proof(coq):
     for tactic in PROOF + [" Qed."]:
