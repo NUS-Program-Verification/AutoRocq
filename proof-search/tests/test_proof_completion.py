@@ -1,19 +1,9 @@
 """
 Completion is reported, not caused.
 
-get_proof_completion_status() used to close the proof it was asked to describe:
-is_ready_for_qed() answered "could this be closed?" by appending Qed and keeping
-it. The two flags the callers read were therefore measured either side of that
-write -- is_complete saw the proof still open, qed_already_applied saw the
-terminator the line above had just added -- and proof_controller required both.
-Reordering those two dict keys would have stopped any run being recorded as
-successful. is_proof_complete() had the matching defect underneath: it resolved
-the proof through unproven_proofs, which a closed proof leaves, so completion
-went False the moment the proof was finished.
-
-These tests pin the contract that replaced it: asking changes nothing and can be
-repeated, apply_qed() is the only thing that closes a proof, a refusal leaves the
-proof untouched and says why, and completion stays true after completion.
+The contract these pin: asking for status changes nothing and can be repeated,
+apply_qed() is the only thing that closes a proof, a refused Qed leaves the
+proof untouched and says why, and completion stays true once a proof is closed.
 """
 
 import sys
@@ -80,7 +70,7 @@ def close_the_goals(coq):
 
 
 def test_asking_for_status_leaves_the_proof_alone(coq):
-    """The regression itself: status used to append Qed as a side effect."""
+    """Reading status must not append Qed, and must be repeatable."""
     opening = coq.get_proof_completion_status()
     assert opening["has_proof"] and not opening["ready_for_qed"], opening
     assert opening == coq.get_proof_completion_status(), "status is not idempotent"
@@ -130,8 +120,8 @@ def test_completion_survives_qed(coq):
 
     assert coq.apply_qed(), f"Qed refused: {coq.get_last_error()}"
 
-    # coqpyt drops a closed proof out of unproven_proofs, which is what the old
-    # implementation read, so this is the exact moment it used to go False.
+    # coqpyt drops a closed proof out of unproven_proofs, so completion cannot
+    # be resolved through it -- this is the moment that distinction shows.
     assert coq.proof_file.unproven_proofs == []
     assert coq.get_unproven_proof() is None
     assert coq.is_proof_complete(), "completion did not survive Qed"
@@ -182,7 +172,7 @@ def test_a_refused_qed_leaves_the_proof_alone_and_says_why(coq, monkeypatch):
 
     is_ready_for_qed() only predicts, so apply_qed() is where that is found out.
     It has to leave the proof exactly as it was, report False, and record the
-    reason -- which used to be swallowed by a bare `except Exception:`.
+    reason rather than swallowing it.
     """
     close_the_goals(coq)
     assert coq.is_ready_for_qed(), "the goals are gone, Qed is worth trying"
