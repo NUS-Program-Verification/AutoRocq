@@ -1,3 +1,4 @@
+import atexit
 import inspect
 import os
 import shutil
@@ -6,23 +7,6 @@ from pathlib import Path
 
 import pytest
 
-
-def skip_if_libraries_missing(config):
-    for entry in config.coq.library_paths or []:
-        path = entry["path"] if isinstance(entry, dict) else entry.path
-        if not os.path.isdir(path):
-            pytest.skip(
-                f"Coq library '{entry.get('name', '?') if isinstance(entry, dict) else '?'}' "
-                f"not available at {path}; configure coq.library_paths (README step 3)"
-            )
-        missing_vo = [
-            source for source in Path(path).rglob("*.v")
-            if not source.with_suffix(".vo").is_file()
-        ]
-        if missing_vo:
-            pytest.skip(
-                f"Coq library at {path} is not compiled; run make in that directory"
-            )
 
 # Project root for tests
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -36,9 +20,10 @@ def configure_test_library(config):
     )
     library_path = library_path.resolve()
     if not (library_path / "BuiltIn.v").is_file():
-        pytest.skip(f"libautorocq source not found at {library_path}")
+        pytest.fail(f"libautorocq source not found at {library_path}")
+    if not (library_path / "BuiltIn.vo").is_file():
+        pytest.fail(f"libautorocq is not compiled at {library_path}")
     config.coq.library_paths = [{"path": str(library_path), "name": "libframac"}]
-    skip_if_libraries_missing(config)
     return config
 
 
@@ -129,7 +114,8 @@ def get_example_file() -> Path:
     return PROJECT_ROOT / "examples" / "example.v"
 
 
-TEMP_EXAMPLE_ROOT = Path(tempfile.gettempdir()) / "autorocq-test-examples"
+TEMP_EXAMPLE_ROOT = Path(tempfile.mkdtemp(prefix="autorocq-test-examples-"))
+atexit.register(shutil.rmtree, TEMP_EXAMPLE_ROOT, ignore_errors=True)
 
 
 def temp_example_copy(name: str) -> Path:
@@ -138,13 +124,11 @@ def temp_example_copy(name: str) -> Path:
 
     Tests must never run against the tracked files in examples/.
 
-    The copy lives under a *fixed* directory for better coqpyt caching.
+    The copy lives under a process-owned directory so concurrent pytest runs
+    cannot rewrite files underneath each other's CoqPyt sessions.
 
-    examples/_CoqProject is copied alongside it. The examples need it to
-    resolve their libframac imports, and a test driving coqpyt's ProofFile
-    directly has nothing that would regenerate it -- test_coqpyt_svcomp is the
-    one that would otherwise fail to load with "pop from empty list". A
-    CoqInterface with auto_setup_coqproject rewrites it with the same content.
+    examples/_CoqProject is copied alongside it when present. Tests that use a
+    bare ProofFile must otherwise create their own project file.
 
     Args:
         name: File name under examples/, e.g. "example.v".

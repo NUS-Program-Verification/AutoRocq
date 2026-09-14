@@ -7,6 +7,8 @@ import sys
 import logging
 from pathlib import Path
 
+import pytest
+
 # Add the parent directory to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -26,10 +28,10 @@ def test_three_tactics():
     try:
         # Load the Coq file
         coq = CoqInterface(file_path)
-        coq.load()
+        assert coq.load(), coq.get_last_error()
         
         # Clear existing tactics
-        coq.clear_unproven_proof_steps()
+        assert coq.clear_unproven_proof_steps(), coq.get_last_error()
         
         # Show initial goal
         initial_goals = coq.get_goal_str()
@@ -39,6 +41,7 @@ def test_three_tactics():
         tactics = ["simpl.", "simpl.", "reflexivity."]
         tactics = ["intros n m.", "intros.", "simpl.", "reflexivity.", "reflexivity."]
         tactics = [" intros b.", " destruct b.", " simpl.", " reflexivity.", " simpl.", " reflexivity."]
+        completion_status = None
         
         for i, tactic in enumerate(tactics, 1):
             print(f"\n{'='*60}")
@@ -47,6 +50,7 @@ def test_three_tactics():
             
             success = coq.apply_tactic(tactic)
             print(f"Goal after tactic: {coq.get_goal_str()}")
+            assert success, coq.get_last_error() or "unknown tactic error"
             
             if success:
                 # Get comprehensive status using the new method
@@ -59,33 +63,22 @@ def test_three_tactics():
                 
                 if status['ready_for_qed']:
                     print(f"  🎉 PROOF READY FOR QED after step {i}!")
-                    return True
+                    completion_status = status
+                    break
                 else:
                     print(f"  ⏳ Proof not yet ready, continuing...")
                     
-            else:
-                error = coq.get_last_error() or "Unknown error"
-                print(f"  ❌ Failed: {error}")
-                return False
-        
         # Final comprehensive check using the new method
         print(f"\n{'='*60}")
         print(f"FINAL STATUS AFTER ALL 3 TACTICS")
         print(f"{'='*60}")
         
-        final_status = coq.get_proof_completion_status()
-        
-        print(f"Final status: {final_status}")
-        
-        if final_status['ready_for_qed']:
-            assert final_status['qed_already_applied']
-            return True
-        else:
-            return False
+        assert completion_status is not None, "the tactic sequence left an open goal"
+        print(f"Final status: {completion_status}")
+        assert completion_status['ready_for_qed']
         
     except Exception as e:
-        print(f"Error: {e}")
-        return False
+        pytest.fail(f"direct tactic proof failed: {e}")
     
     finally:
         try:
@@ -97,7 +90,8 @@ if __name__ == "__main__":
     print("Testing if three tactics can prove the goal...")
     print("=" * 50)
     
-    success = test_three_tactics()
+    test_three_tactics()
+    success = True
     
     print("=" * 50)
     if success:

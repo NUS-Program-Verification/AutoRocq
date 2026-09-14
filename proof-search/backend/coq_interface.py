@@ -38,14 +38,15 @@ class CoqInterface:
         """
         self.logger = setup_logger("CoqInterface")
 
-        self._scratch = ScratchProof(file_path, self.logger)
+        if workspace is not None and not os.path.isabs(workspace):
+            workspace = os.path.abspath(workspace)
+        self.workspace = workspace
+
+        self._scratch = ScratchProof(file_path, self.logger, workspace=self.workspace)
         self.source_path = str(self._scratch.source)
         self.file_path = str(self._scratch.open())
         self._scratch_cleanup = self._scratch.close
         atexit.register(self._scratch_cleanup)
-        if workspace is not None and not os.path.isabs(workspace):
-            workspace = os.path.abspath(workspace)
-        self.workspace = workspace
         
         # Library support attributes
         self.library_paths = library_paths or []
