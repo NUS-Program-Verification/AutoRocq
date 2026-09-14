@@ -106,7 +106,9 @@ class TacticHistoryManager:
         tactic: str, 
         goals_before: str, 
         goals_after: str, 
-        theorem_name: str
+        theorem_name: str,
+        hypotheses_before: str = "",
+        hypotheses_after: str = "",
     ) -> str:
         """Create a unique signature for a tactic entry to detect duplicates.
         
@@ -119,17 +121,25 @@ class TacticHistoryManager:
             goals_before_clean = goals_before.strip().lower()
             goals_after_clean = goals_after.strip().lower()
             
-            # Create signature based on ALL THREE key fields (excluding theorem_name)
-            # We don't include theorem_name because the same tactic+states might appear
-            # in different theorems and should still be considered duplicates
-            signature = f"{tactic_clean}|||{goals_before_clean}|||{goals_after_clean}"
+            theorem_name_clean = theorem_name.strip().lower()
+            hypotheses_before_clean = hypotheses_before.strip().lower()
+            hypotheses_after_clean = hypotheses_after.strip().lower()
+
+            # Keep theorem/hypothesis provenance in deduplication.
+            signature = (
+                f"{tactic_clean}|||{goals_before_clean}|||{goals_after_clean}"
+                f"|||{hypotheses_before_clean}|||{hypotheses_after_clean}|||{theorem_name_clean}"
+            )
             
             return signature
             
         except Exception as e:
             self.logger.error(f"Error creating tactic signature: {e}")
             # Return a fallback signature to prevent blocking
-            return f"{tactic}|||{hash(goals_before)}|||{hash(goals_after)}"
+            return (
+                f"{tactic}|||{hash(goals_before)}|||{hash(goals_after)}"
+                f"|||{hash(hypotheses_before)}|||{hash(hypotheses_after)}|||{theorem_name}"
+            )
 
     def add_successful_tactic(
         self, 
@@ -149,7 +159,14 @@ class TacticHistoryManager:
         """
         try:
             # Create tactic signature for duplicate checking
-            signature = self._create_tactic_signature(tactic, goals_before, goals_after, theorem_name)
+            signature = self._create_tactic_signature(
+                tactic=tactic,
+                goals_before=goals_before,
+                goals_after=goals_after,
+                theorem_name=theorem_name,
+                hypotheses_before=hypotheses_before,
+                hypotheses_after=hypotheses_after,
+            )
             
             # Check for duplicate using the signature set (O(1) lookup)
             if signature in self._tactic_signatures:
@@ -360,7 +377,9 @@ class TacticHistoryManager:
                     entry.tactic,
                     entry.goals_before, 
                     entry.goals_after,
-                    entry.theorem_name
+                    entry.theorem_name,
+                    entry.hypotheses_before,
+                    entry.hypotheses_after,
                 )
                 self._tactic_signatures.add(signature)
 
@@ -480,6 +499,11 @@ class TacticHistoryManager:
                     "tactic": entry.tactic,
                     "goals_before": entry.goals_before,
                     "goals_after": entry.goals_after,
+                    "hypotheses_before": entry.hypotheses_before,
+                    "hypotheses_after": entry.hypotheses_after,
+                    "theorem_name": entry.theorem_name,
+                    "step_number": entry.step_number,
+                    "source": entry.source,
                     "similarity_score": round(similarity, 3)  # For debugging, can be removed
                 })
             
@@ -523,7 +547,8 @@ class TacticHistoryManager:
                         'hypotheses_after': entry.hypotheses_after,
                         'theorem_name': entry.theorem_name,
                         'timestamp': entry.timestamp.isoformat() if hasattr(entry.timestamp, 'isoformat') else str(entry.timestamp),
-                        'step_number': entry.step_number
+                        'step_number': entry.step_number,
+                        'source': entry.source
                     }
                     result.append(entry_dict)
                     
@@ -573,7 +598,8 @@ class TacticHistoryManager:
                         'hypotheses_after': entry.hypotheses_after,
                         'theorem_name': entry.theorem_name,
                         'timestamp': entry.timestamp.isoformat() if hasattr(entry.timestamp, 'isoformat') else str(entry.timestamp),
-                        'step_number': entry.step_number
+                        'step_number': entry.step_number,
+                        'source': entry.source
                     }
                     result.append(entry_dict)
                     

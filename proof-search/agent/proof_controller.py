@@ -1,4 +1,5 @@
 import os
+import re
 
 from pathlib import Path
 from typing import Dict, Optional, Any, List
@@ -8,7 +9,7 @@ from agent.proof_tree import ProofTree
 from agent import visualizer
 from utils.recorder import create_proof_recorder
 from utils.logger import clean_ansi_codes, setup_logger
-from utils.coq_utils import hints_from_error, goal_diff
+from utils.coq_utils import hints_from_error
 from utils.config import InteractiveConfig
 
 class ProofController:
@@ -73,6 +74,9 @@ class ProofController:
         # Interactive session state
         self._pending_hints: List[str] = []        # User hints to inject into next prompt
         self._tactics_with_states: List[Dict] = [] # All applied tactics (user + agent); source field distinguishes them
+        self._history_context_signature: Optional[str] = None
+        self._last_normalized_error: Optional[str] = None
+        self._consecutive_same_error: int = 0
         
         # Initialize proof recorder
         self.enable_recording = enable_recording
@@ -249,6 +253,9 @@ class ProofController:
         self.query_commands = []
         self._pending_hints = []
         self._tactics_with_states = []
+        self._history_context_signature = None
+        self._last_normalized_error = None
+        self._consecutive_same_error = 0
 
         # Check for unproven proof
         unproven_proof = self.coq.get_unproven_proof()
@@ -354,12 +361,15 @@ class ProofController:
             consecutive_queries = 0
             consecutive_errors = 0
             error_tactics.clear()
+            self._last_normalized_error = None
+            self._consecutive_same_error = 0
 
         tool_call_id = None
         should_optimize = False
         role = "user"
         proof_tree_str = self.proof_tree.get_proof_tree_string()
         prompt = self.context_manager.build_initial_prompt(proof_tree_str)
+        prompt += self._build_history_context_feedback(force_refresh=True)
 
         while self.gen_step_count < self.max_steps:
             if self.global_step_id > self.max_steps * (self.max_context_search + 1):
@@ -465,6 +475,7 @@ class ProofController:
                         f"## CURRENT PROOF TREE:\n{proof_tree_str}\n\n"
                         "Now consider a different approach to complete the proof. Update the plan if needed. Avoid repeating the same tactics that led to this rollback."
                     )
+                    prompt += self._build_history_context_feedback(force_refresh=True)
                     yield {'type': 'rollback', 'success': True, 'distance': rollback_distance}
                 else:
                     prompt = f"Rollback failed: {rollback_result.get('message', 'Unknown error')}\nPlease continue with tactics."
@@ -524,17 +535,18 @@ class ProofController:
                     error_tactics.append(tactic_content)
                     self.failed_tactics.append(tactic_content)
                     failed_error = self.coq.get_last_error()
+                    same_error_streak = self._update_error_streak(failed_error)
                     self.logger.info(f"⚠️  Step {self.global_step_id}: TACTIC APPLICATION failed")
 
                     if consecutive_errors == self.max_errors + 1 and self.enable_hammer:
                         success = self._try_hammer()
 
                     if not success:
-                        prompt += f"Tactic application failed with error: {failed_error}\n"
-                        prompt += hints_from_error(tactic_content, failed_error)
-                        if consecutive_errors > self.max_errors:
-                            prompt += "\nIf errors persist, you may consider using other available tools."
-                        prompt += self._provide_history_feedback(consecutive_errors)
+                        prompt += self._build_rejected_tactic_feedback(
+                            tactic_content=tactic_content,
+                            failed_error=failed_error,
+                            same_error_streak=same_error_streak,
+                        )
                         yield {'type': 'tactic', 'tactic': tactic_content, 'success': False,
                                'error': failed_error, 'goals_after': goals_before, 'proof_complete': False}
                         continue
@@ -575,6 +587,7 @@ class ProofController:
                     prompt += f"Tactic '{tactic_content}' applied successfully.\n\n"
                     if goals_after_str != goals_before_str:
                         prompt += f"## CURRENT PROOF TREE:\n{proof_tree_str}\n"
+                        prompt += self._build_history_context_feedback()
                     else:
                         prompt += "Goals: No changes.\n"
                     prompt += f"Hypotheses: {current_hypotheses_after if current_hypotheses_after else 'None'}\n"
@@ -598,6 +611,87 @@ class ProofController:
         else:
             self.logger.warning(f"❌ Step {self.global_step_id}: QUERY failed: {query_content}")
         return response
+
+    def _normalize_diagnostic(self, diagnostic: Optional[str]) -> str:
+        clean_diagnostic = clean_ansi_codes(diagnostic or "")
+        return re.sub(r"\s+", " ", clean_diagnostic).strip()
+
+    def _update_error_streak(self, failed_error: Optional[str]) -> int:
+        normalized_error = self._normalize_diagnostic(failed_error)
+        if not normalized_error:
+            self._last_normalized_error = None
+            self._consecutive_same_error = 0
+            return 0
+
+        if normalized_error == self._last_normalized_error:
+            self._consecutive_same_error += 1
+        else:
+            self._last_normalized_error = normalized_error
+            self._consecutive_same_error = 1
+        return self._consecutive_same_error
+
+    def _build_history_context_feedback(self, force_refresh: bool = False) -> str:
+        if not self.context_manager.enable_history_context:
+            return ""
+
+        clean_goal_str = clean_ansi_codes(self.coq.get_goal_str() or "").strip()
+        if not clean_goal_str:
+            return ""
+
+        clean_hypothesis_str = clean_ansi_codes(self.coq.get_hypothesis() or "").strip()
+        signature = f"{clean_goal_str}|||{clean_hypothesis_str}"
+        if not force_refresh and signature == self._history_context_signature:
+            return ""
+        self._history_context_signature = signature
+
+        similar_proof_states = self.context_manager.get_similar_history(clean_goal_str, n=5)
+        if not similar_proof_states:
+            return ""
+
+        feedback = "\n## RELEVANT SUCCESSFUL TRANSITIONS (TOP 5):\n"
+        for i, entry in enumerate(similar_proof_states[:5], 1):
+            tactic = clean_ansi_codes(str(entry.get('tactic', 'Unknown'))).strip()
+            if tactic in ('', '{', '}', 'Unknown'):
+                continue
+            goals_before = clean_ansi_codes(str(entry.get('goals_before', ''))).strip() or "None"
+            goals_after = clean_ansi_codes(str(entry.get('goals_after', ''))).strip() or "None"
+            hypotheses_before = clean_ansi_codes(str(entry.get('hypotheses_before', ''))).strip() or "None"
+            hypotheses_after = clean_ansi_codes(str(entry.get('hypotheses_after', ''))).strip() or "None"
+            theorem_name = clean_ansi_codes(str(entry.get('theorem_name', 'unknown theorem'))).strip() or "unknown theorem"
+            source = clean_ansi_codes(str(entry.get('source', 'unknown source'))).strip() or "unknown source"
+            step_number = entry.get('step_number')
+            feedback += (
+                f"{i}. tactic: {tactic}\n"
+                f"   theorem: {theorem_name}\n"
+                f"   step: {step_number if step_number is not None else 'unknown'}\n"
+                f"   source: {source}\n"
+                f"   goals_before: {goals_before}\n"
+                f"   hypotheses_before: {hypotheses_before}\n"
+                f"   goals_after: {goals_after}\n"
+                f"   hypotheses_after: {hypotheses_after}\n"
+            )
+        return feedback
+
+    def _build_rejected_tactic_feedback(self, tactic_content: str, failed_error: Optional[str], same_error_streak: int) -> str:
+        proof_tree_str = self.proof_tree.get_proof_tree_string() if self.proof_tree else "No proof tree available."
+        feedback = ""
+
+        if self.enable_error_feedback:
+            feedback += f"Tactic: {tactic_content}\n"
+            feedback += f"{failed_error or ''}\n"
+            feedback += hints_from_error(tactic_content, failed_error)
+            if (
+                self.context_manager.enable_context_search
+                and same_error_streak >= self.max_errors
+            ):
+                feedback += (
+                    f"\nThe same diagnostic has occurred {same_error_streak} consecutive times. "
+                    "Call `query` before trying another tactic."
+                )
+
+        feedback += f"\n## CURRENT PROOF TREE:\n{proof_tree_str}\n"
+        feedback += self._build_history_context_feedback()
+        return feedback
 
     ############################
     ##  Proof tree / state   ##
@@ -637,7 +731,8 @@ class ProofController:
                 hypotheses_before=state['hypotheses_before'],
                 hypotheses_after=state['hypotheses_after'],
                 theorem_name=self.current_theorem_name,
-                step_number=state['step_number']
+                step_number=state['step_number'],
+                source=state.get('source', 'agent')
             )
 
     def _handle_successful_tactic(self, successful_tactic, subgoals_before, subgoals_after, goals_before, goals_after, hypotheses_before, hypotheses_after) -> Dict[str, Any]:
@@ -897,33 +992,6 @@ class ProofController:
                 'success': False,
                 'message': f'Rollback execution failed: {str(e)}'
             }
-
-
-    def _provide_history_feedback(self, consecutive_errors: int) -> str:
-        # Add suggestions from history ONCE per proof state
-        if not self.context_manager.enable_history_context:
-            return ""
-        if consecutive_errors != self.max_errors + 1:
-            return ""
-        if not self.coq.get_goal_str():
-            return ""
-        
-        clean_goal_str = clean_ansi_codes(self.coq.get_goal_str())
-        feedback = ""
-
-        # Suggest similar tactics
-        similar_proof_states = self.context_manager.get_similar_history(clean_goal_str, n=5)
-        if similar_proof_states:
-            feedback += "\nHere are some tactics found in history, formatted as '<id>. <tactic> \\n <proof goal diff>':\n\n"
-            for i, entry in enumerate(similar_proof_states, 1):
-                tactic = clean_ansi_codes(str(entry.get('tactic', 'Unknown'))).strip()
-                if tactic in ('', '{', '}', 'Unknown'):
-                    continue
-                goals_before = clean_ansi_codes(str(entry.get('goals_before', '')))
-                diff_str = goal_diff(clean_goal_str, goals_before)
-                feedback += f"   {i}. {tactic}\n{diff_str[:100]}{'...' if len(diff_str) > 100 else ''}\n"
-
-        return feedback
 
 
     def _try_hammer(self) -> bool:
