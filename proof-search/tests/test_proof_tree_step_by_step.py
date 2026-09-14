@@ -7,6 +7,8 @@ Uses ProofController._apply_tactic() which maintains the proof tree automaticall
 import sys
 from pathlib import Path
 
+import pytest
+
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -17,8 +19,8 @@ from agent.proof_tree import ProofTree
 from agent.proof_controller import ProofController
 from utils.config import ProofAgentConfig
 from tests.test_utils import (
+    configure_test_library,
     reset_coq_file_to_admitted,
-    skip_if_libraries_missing,
     temp_example_copy,
 )
 
@@ -46,14 +48,11 @@ def test_proof_tree_evolution():
     
     # Clean the file first
     print("\n🧹 Cleaning proof file...")
-    if not reset_coq_file_to_admitted(coq_file, backup=True):
-        print("❌ Failed to clean file")
-        return False
+    assert reset_coq_file_to_admitted(coq_file, backup=True)
     print("✅ File cleaned successfully")
     
     # Load configuration
-    config = ProofAgentConfig.from_file(str(config_file))
-    skip_if_libraries_missing(config)
+    config = configure_test_library(ProofAgentConfig.from_file(str(config_file)))
     print(f"✅ Loaded configuration from {config_file}")
     
     # Create CoqInterface
@@ -66,7 +65,7 @@ def test_proof_tree_evolution():
     )
     
     try:
-        coq_interface.load()
+        assert coq_interface.load(), coq_interface.get_last_error()
         print("✅ CoqInterface loaded")
         
         # Create ContextManager
@@ -151,9 +150,7 @@ def test_proof_tree_evolution():
             # USE ProofController._apply_tactic()
             success = controller._apply_tactic(tactic)
             
-            if not success:
-                error = coq_interface.get_last_error()
-                raise Exception(f"\n❌ Tactic failed: {error}")
+            assert success, coq_interface.get_last_error()
             
             # Get state after for display
             subgoals_after = coq_interface.get_subgoals()
@@ -177,6 +174,7 @@ def test_proof_tree_evolution():
                 hypotheses_before,
                 hypotheses_after
             )
+            assert len(controller.proof_tree.open_subgoals) == len(subgoals_after)
             
             # Print the proof tree using get_proof_tree_string()
             print("\n" + "🌳" * 30)
@@ -212,13 +210,9 @@ def test_proof_tree_evolution():
         print(f"\n💾 Saved final proof tree PNG: {final_png_path}.png")
         
         print("\n🎉 Test completed successfully!")
-        return True
         
     except Exception as e:
-        print(f"\n❌ Test failed with exception: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+        pytest.fail(f"proof-tree evolution failed: {e}")
         
     finally:
         coq_interface.close()
@@ -230,7 +224,8 @@ if __name__ == "__main__":
     print("   Using ProofController._apply_tactic() to maintain proof tree")
     print("=" * 80)
     
-    success = test_proof_tree_evolution()
+    test_proof_tree_evolution()
+    success = True
     
     print("\n" + "=" * 80)
     if success:

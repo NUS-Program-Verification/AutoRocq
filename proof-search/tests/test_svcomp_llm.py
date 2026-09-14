@@ -14,7 +14,7 @@ from backend.coq_interface import CoqInterface
 from agent.context_manager import ContextManager
 from agent.proof_controller import ProofController
 from utils.config import ProofAgentConfig
-from tests.test_utils import temp_example_copy
+from tests.test_utils import configure_test_library, temp_example_copy
 
 # --- CONFIGURATION ---
 coq_file = temp_example_copy("main_loop_invariant_2_established_Coq.v")
@@ -112,13 +112,12 @@ def test_llm_proof_generation_with_controller():
     try:
         # **CRITICAL: Clean the proof file first before loading**
         print("🧹 Step 1: Clean the proof file to remove any completed proof")
-        clean_success = clean_proof_file(coq_file)
-        if not clean_success:
-            print("❌ Failed to clean proof file - cannot proceed")
-            return False
+        assert clean_proof_file(coq_file)
         
         # Load configuration from file
-        config = ProofAgentConfig.from_file(str(config_file))
+        config = configure_test_library(ProofAgentConfig.from_file(str(config_file)))
+        if not config.llm.api_key:
+            pytest.skip("requires an LLM API key")
         print(f"✅ Loaded configuration from {config_file}")
         print(f"📚 Library paths configured: {len(config.coq.library_paths)}")
         for lib in config.coq.library_paths:
@@ -139,10 +138,7 @@ def test_llm_proof_generation_with_controller():
             print("✅ Created CoqInterface with auto-configured libraries")
             
             # Load the cleaned file
-            success = coq_interface.load()
-            if not success:
-                print(f"❌ Failed to load cleaned file: {coq_interface.get_last_error()}")
-                return False
+            assert coq_interface.load(), coq_interface.get_last_error()
             
             print("✅ Cleaned file loaded successfully")
             
@@ -191,9 +187,7 @@ def test_llm_proof_generation_with_controller():
             status = coq_interface.get_proof_status()
             print(f"📊 Proof status after cleaning: loaded={status.get('has_proof')}, steps={status.get('proof_steps')}")
             
-            if not status.get("has_proof", False):
-                print("❌ No proof loaded properly after cleaning")
-                return False
+            assert status.get("has_proof", False), status
             
             print(f"🎯 Working on clean proof with {status['proof_steps']} initial steps")
             
@@ -307,17 +301,14 @@ def test_llm_proof_generation_with_controller():
                 print("   - May need improved error feedback strategies")
                 print("   - Controller framework is working but needs tuning")
             
-            return is_complete
+            assert is_complete
         
         finally:
             # Always clean up
             coq_interface.close()
             
     except Exception as e:
-        print(f"❌ ProofController test failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+        pytest.fail(f"LLM proof generation failed: {e}")
 
 if __name__ == "__main__":
     print("=" * 70)
@@ -338,7 +329,8 @@ if __name__ == "__main__":
     
     # Test ProofController with built-in error handling
     print("🤖🔧 Testing ProofController with built-in error handling...")
-    controller_success = test_llm_proof_generation_with_controller()
+    test_llm_proof_generation_with_controller()
+    controller_success = True
     
     # Final summary
     print("\n" + "="*70)
