@@ -546,6 +546,8 @@ class ContextManager:
         clean_proof_file_content = clean_ansi_codes(proof_file_content)
         essential_content = self.extract_essential_proof_content(clean_proof_file_content)
         prompt += essential_content + "\n\n"
+
+        prompt += f"## CURRENT PROOF TREE:\n{proof_tree_str}\n\n"
         
         # Initial plan: use proof plan if available
         if self.proof_plan:
@@ -556,7 +558,14 @@ class ContextManager:
         return prompt
 
     def extract_essential_proof_content(self, proof_file_content):
-        return extract_essential_proof_content(self.logger, proof_file_content)
+        proof_file = getattr(self.coq, "proof_file", None)
+        return extract_essential_proof_content(
+            self.logger,
+            proof_file_content,
+            proof=getattr(self.coq, "proof", None),
+            file_context=getattr(proof_file, "context", None),
+            file_path=getattr(self.coq, "file_path", None),
+        )
 
     def handle_plan_call(self, plan_content: str, tool_call_id: str) -> bool:
         # Store the plan in chat session

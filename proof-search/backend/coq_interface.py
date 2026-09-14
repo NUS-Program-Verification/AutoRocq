@@ -333,40 +333,38 @@ class CoqInterface:
             self.logger.error(f"Error getting goal string: {e}")
             return f"(error retrieving goals: {str(e)})"
     
+    @staticmethod
+    def format_hypotheses(goal) -> str:
+        """One line per hypothesis of a coqpyt Goal, the way Rocq prints them.
+
+        A let-bound hypothesis carries its body in Hyp.definition and reads
+        "y := true : bool"; the body is kept.
+        """
+        lines = []
+        for hyp in getattr(goal, 'hyps', None) or []:
+            names = ', '.join(getattr(hyp, 'names', None) or [])
+            ty = getattr(hyp, 'ty', '')
+            definition = getattr(hyp, 'definition', None)
+            if not names:
+                lines.append(str(ty))
+                continue
+            head = f"{names} := {definition}" if definition else names
+            lines.append(f"{head} : {ty}")
+        return '\n'.join(lines)
+
     def get_raw_hypothesis(self):
-        """Return the current hypotheses/context for the active proof state."""
+        """Return the context of the focused goal, one hypothesis per line.
+
+        The context lives on the goals, not on the proof's steps. Backgrounded
+        goals are left out; get_subgoals() is there for the rest.
+        """
         try:
-            proof = self.get_unproven_proof()
-            if not proof or not proof.steps:
+            subgoals = self.get_subgoals()
+            if not subgoals:
                 return ""
-            
-            # Get the last step's context/hypotheses
-            last_step = proof.steps[-1]
-            
-            # Try different ways to get hypotheses
-            if hasattr(last_step, 'hypotheses'):
-                hyp = last_step.hypotheses
-            elif hasattr(last_step, 'context'):
-                hyp = last_step.context
-            else:
-                return ""
-            
-            if not hyp:
-                return ""
-            
-            # Handle different hypothesis formats
-            if isinstance(hyp, dict):
-                if not hyp:
-                    return ""
-                hyp_lines = []
-                for name, value in hyp.items():
-                    hyp_lines.append(f"{name} : {value}")
-                return "\n".join(hyp_lines)
-            elif isinstance(hyp, list):
-                return "\n".join(str(h) for h in hyp)
-            else:
-                return str(hyp)
-                
+
+            return self.format_hypotheses(subgoals[0])
+
         except Exception as e:
             self.logger.error(f"Error getting hypotheses: {e}")
             return f"(error retrieving hypotheses: {str(e)})"
@@ -436,9 +434,17 @@ class CoqInterface:
             # Clean the tactic string
             tactic_clean = tactic.strip().replace('\n', '').replace('\r', '')
 
-            # Ensure tactic ends with period (except for { and } which don't need periods)
+            # Ensure tactics end with a period. Structural focus tokens are
+            # complete Rocq sentences without one.
             # Note: } should be applied as ' }' (with leading space, no period)
-            if not tactic_clean.endswith('.') and tactic_clean.strip() not in ['{', '}']:
+            structural_token = (
+                tactic_clean.strip() in ['{', '}', '-', '+', '*']
+                or re.fullmatch(r"\d+\s*:\s*\{", tactic_clean.strip())
+            )
+            if (
+                not tactic_clean.endswith('.')
+                and not structural_token
+            ):
                 tactic_clean += '.'
             
             # Special handling for closing brace: ensure it has a leading space
@@ -1424,8 +1430,10 @@ class CoqInterface:
             
             # Get CURRENT goals directly from proof_file (not from cached step.goals)
             current_goals = self._get_current_goals_cached()
-            
-            if not current_goals:
+
+            # `is None` on purpose: a GoalAnswer with no goals left is still
+            # truthy, so `if not current_goals` would never fire here.
+            if current_goals is None:
                 self.logger.debug("No current goals available")
                 return []
             
