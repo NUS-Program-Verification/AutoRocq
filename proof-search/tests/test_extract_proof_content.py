@@ -6,6 +6,8 @@ Simple test script for extract_essential_proof_content function using real file
 import sys
 from pathlib import Path
 
+import pytest
+
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -14,6 +16,7 @@ from backend.coq_interface import CoqInterface
 from agent.context_manager import ContextManager
 from utils.config import ProofAgentConfig
 from tests.test_utils import (
+    configure_test_library,
     reset_coq_file_to_admitted,
     restore_coq_file_from_backup,
     temp_example_copy,
@@ -48,14 +51,12 @@ def test_extract_with_real_file():
     try:
         # Check if file exists
         if not coq_file.exists():
-            print(f"❌ File not found: {coq_file}")
-            return False
+            pytest.fail(f"file not found: {coq_file}")
         
-        clean_proof_file(coq_file)
+        assert clean_proof_file(coq_file)
         # Check if config file exists
         if not config_file.exists():
-            print(f"❌ Config file not found: {config_file}")
-            return False
+            pytest.fail(f"config file not found: {config_file}")
         
         # Read the file
         print("📖 Reading file...")
@@ -74,7 +75,7 @@ def test_extract_with_real_file():
         
         # Load configuration from file
         print(f"📄 Loading config from: {config_file}")
-        config = ProofAgentConfig.from_file(str(config_file))
+        config = configure_test_library(ProofAgentConfig.from_file(str(config_file)))
         print(f"✅ Loaded configuration from {config_file}")
         
         # Create CoqInterface
@@ -85,7 +86,7 @@ def test_extract_with_real_file():
             auto_setup_coqproject=config.coq.auto_setup_coqproject,
             timeout=config.coq.timeout
         )
-        coq_interface.load()
+        assert coq_interface.load(), coq_interface.get_last_error()
         
         try:
             # Create ContextManager
@@ -158,23 +159,21 @@ def test_extract_with_real_file():
             else:
                 print("❌ FAILED! Some checks didn't pass")
             
-            return all_passed
+            assert all_passed, checks
         
         finally:
             coq_interface.close()
         
     except Exception as e:
-        print(f"❌ Test failed with exception: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+        pytest.fail(f"proof-content extraction failed: {e}")
 
 if __name__ == "__main__":
     print("🚀 Simple Essential Content Extraction Test")
     print("=" * 70)
     
     # Run the test
-    success = test_extract_with_real_file()
+    test_extract_with_real_file()
+    success = True
     
     # Final summary
     print("\n" + "=" * 70)

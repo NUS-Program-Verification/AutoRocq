@@ -266,6 +266,33 @@ class CoqInterface:
         self.__cached_goals = current_goals
         self.__goal_cache_filled = True
         return current_goals
+
+    def _open_goal_count(self) -> Optional[int]:
+        """Count goals in CoqPyt's structured current-goal response.
+
+        Focused, background, shelved, and given-up goals all keep a proof from
+        being ready for ``Qed``. ``None`` means the structured state could not
+        be read.
+        """
+        goal_answer = self._get_current_goals_cached()
+        if goal_answer is None:
+            return None
+
+        goal_config = getattr(goal_answer, 'goals', None)
+        if goal_config is None:
+            return None
+
+        count = len(getattr(goal_config, 'goals', None) or [])
+        for before, after in getattr(goal_config, 'stack', None) or []:
+            count += len(before or []) + len(after or [])
+        count += len(getattr(goal_config, 'shelf', None) or [])
+        count += len(getattr(goal_config, 'given_up', None) or [])
+        return count
+
+    def has_open_goals(self) -> bool:
+        """Whether CoqPyt reports any focused, background, or hidden goal."""
+        count = self._open_goal_count()
+        return count is not None and count > 0
     
     def get_raw_goal_str(self):
         """Return the string representation of the current goal."""
@@ -599,54 +626,61 @@ class CoqInterface:
         except Exception as e:
             self.logger.error(f"Error printing goals: {e}")
 
+    TERMINATORS = ['qed.', 'qed', 'defined.', 'defined']
+
+    def _current_proof(self):
+        """The proof this interface is driving.
+
+        self.proof comes first because that is the object apply_tactic and
+        apply_qed append to: it stays right after Qed lands, when coqpyt has
+        taken the proof out of unproven_proofs and get_unproven_proof() would
+        answer None (single-proof file) or, worse, hand back some other
+        unfinished proof in the same file. load() and restart_coq_server() set
+        it; close() clears it, and the lookup is the fallback for that.
+        """
+        return getattr(self, 'proof', None) or self.get_unproven_proof()
+
+    def _last_step_is_terminator(self, proof) -> bool:
+        """Whether the proof already carries its Qed/Defined."""
+        if not proof or not proof.steps:
+            return False
+        return proof.steps[-1].text.strip().lower() in self.TERMINATORS
+
+    def _no_goals_left(self, goals: Optional[str]) -> bool:
+        """Whether a goal string says there is nothing left to prove."""
+        if not goals or goals.strip() in ["", "(no current goal)", "no more goals", "proof completed"]:
+            return True
+        goals_lower = goals.lower().strip()
+        return any(indicator in goals_lower for indicator in [
+            "proof finished",
+            "no more subgoals",
+            "proof complete",
+            "proof is completed",
+            "no more goals",
+        ])
+
     def is_proof_complete(self) -> bool:
-        """Check if the current proof is complete."""
+        """Whether the current proof is closed. Stays True once Qed lands."""
         try:
-            proof = self.get_unproven_proof()
+            proof = self._current_proof()
             if not proof:
-                self.logger.warning("No unproven proof found")
+                self.logger.warning("No proof found")
                 return False
             
             if not proof.steps:
                 return False
             
-            # Check if last step is Qed/Defined
-            last_step_text = proof.steps[-1].text.strip().lower()
-            if last_step_text in ['qed.', 'qed', 'defined.', 'defined']:
-                self.logger.debug(f"Found Qed/Defined step: {last_step_text}")
+            # A proof that carries its terminator is finished, and stays finished.
+            if self._last_step_is_terminator(proof):
+                self.logger.debug("Found Qed/Defined step")
                 return True
             
-            # Get current goals
-            goals = self.get_goal_str()
-            
-            # Check for "Proof finished" specifically
-            if goals and "proof finished" in goals.lower():
-                self.logger.debug("Found 'Proof finished' indicator")
-                return True
-            
-            if goals and "no more goals, but there are some goals you gave up" in goals.lower():
-                self.logger.debug("Found incomplete proof with given up goals")
-                return False
-            
-            # Check various indicators of completion
-            if not goals or goals.strip() in ["", "(no current goal)", "no more goals", "proof completed"]:
+            open_goal_count = self._open_goal_count()
+            if open_goal_count == 0:
                 self.logger.debug("No goals remaining - proof complete")
                 return True
-            
-            # Check if goals string indicates completion
-            goals_lower = goals.lower().strip()
-            completion_indicators = [
-                "proof finished",
-                "no more subgoals",
-                "proof complete",
-                "proof is completed",
-                "no more goals"
-            ]
-            
-            for indicator in completion_indicators:
-                if indicator in goals_lower:
-                    self.logger.debug(f"Found completion indicator: {indicator}")
-                    return True
+            if open_goal_count is not None:
+                return False
             
             # Check the proof file's internal state
             try:
@@ -1247,18 +1281,43 @@ class CoqInterface:
             }
 
     def is_ready_for_qed(self) -> bool:
-        """
-        Check if the proof is ready for Qed by actually trying to apply it.
-        If Qed succeeds, keep it. If Qed fails, pop it back out.
+        """Whether the proof could be closed now. Does not touch the file.
+
+        This used to answer the question by appending Qed and keeping it, so
+        everything that merely asked also changed the proof --
+        get_proof_completion_status() included. Applying the terminator is
+        apply_qed()'s job; this only reports whether it is worth trying.
         """
         try:
-            proof = self.get_unproven_proof()
+            proof = self._current_proof()
+            if not proof or not proof.steps:
+                return False
+
+            if self._last_step_is_terminator(proof):
+                return True
+
+            open_goal_count = self._open_goal_count()
+            if open_goal_count is None:
+                self.logger.debug("No structured goal state available")
+                return False
+
+            return open_goal_count == 0
+
+        except Exception as e:
+            self.logger.error(f"Error checking if ready for Qed: {e}")
+            return False
+
+    def apply_qed(self) -> bool:
+        """Close the proof: append Qed, keep it if Rocq accepts it, pop it back
+        out if it does not. Returns whether the proof carries a terminator after.
+        """
+        try:
+            proof = self._current_proof()
             if not proof or not proof.steps:
                 return False
             
             # Check if Qed is already applied
-            last_step_text = proof.steps[-1].text.strip().lower()
-            if last_step_text in ['qed.', 'qed', 'defined.', 'defined']:
+            if self._last_step_is_terminator(proof):
                 self.logger.debug("Qed already applied")
                 return True  # Already has Qed, so it was ready
             
@@ -1268,7 +1327,7 @@ class CoqInterface:
             try:
                 # Try to apply Qed
                 formatted_qed = "\n  Qed."
-                self.proof_file.append_step(self.proof, formatted_qed)
+                self.proof_file.append_step(proof, formatted_qed)
                 
                 # If we get here, Qed was successfully applied
                 self.logger.info("✅ Qed applied successfully - proof is complete! Keeping Qed in file.")
@@ -1276,12 +1335,17 @@ class CoqInterface:
                 
                 return True
             
-            except Exception:
-                
+            except Exception as qed_error:
+                # Rocq refused the terminator: unresolved evars, a guard
+                # condition it cannot check. Record why -- this used to be
+                # dropped, leaving "not complete" with no reason anywhere.
+                self.last_error = f"Qed refused: {qed_error}"
+                self.logger.info(f"❌ Qed refused: {qed_error}")
+
                 # Make sure we didn't accidentally add a step due to the failed attempt
                 if len(proof.steps) > original_step_count:
                     try:
-                        self.proof_file.pop_step(self.proof)
+                        self.proof_file.pop_step(proof)
                         self.logger.debug("Cleaned up failed Qed attempt")
                     except Exception as cleanup_error:
                         self.logger.warning(f"Error cleaning up failed Qed: {cleanup_error}")
@@ -1290,16 +1354,19 @@ class CoqInterface:
             return False
             
         except Exception as e:
-            self.logger.error(f"Error checking if ready for Qed: {e}")
+            self.logger.error(f"Error applying Qed: {e}")
             return False
 
     def get_proof_completion_status(self) -> dict:
         """
-        Get comprehensive information about proof completion status.
-        Returns a dictionary with detailed status information.
+        Report on the proof without changing it.
+
+        Asking twice gives the same answer: nothing here applies Qed, and
+        nothing depends on the order these keys are built in. apply_qed() is
+        what closes a proof, when the caller decides to.
         """
         try:
-            proof = self.get_unproven_proof()
+            proof = self._current_proof()
             goals = self.get_goal_str()
             
             status = {
@@ -1308,16 +1375,9 @@ class CoqInterface:
                 'current_goals': goals,
                 'is_complete': self.is_proof_complete(),
                 'ready_for_qed': self.is_ready_for_qed(),
-                'qed_already_applied': False
+                'qed_already_applied': self._last_step_is_terminator(proof),
             }
-            
-            if proof and proof.steps:
-                last_step_text = proof.steps[-1].text.strip().lower()
-                status['qed_already_applied'] = last_step_text in ['qed.', 'qed', 'defined.', 'defined']
-            
-            # Qed should have been applied if is_ready_for_qed()
-            assert status['qed_already_applied'] == status['ready_for_qed']
-        
+
             return status
             
         except Exception as e:
