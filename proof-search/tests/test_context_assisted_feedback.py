@@ -11,6 +11,7 @@ from unittest.mock import Mock
 import pytest
 
 from agent.proof_controller import ProofController
+from agent.proof_tree import ProofTree
 
 
 TREE = "0. Proof.\n   Goal: target\n   Status: Open"
@@ -79,8 +80,10 @@ class SequencedCoq(RejectingCoq):
     def __init__(self, outcomes):
         super().__init__([])
         self.outcomes = list(outcomes)
+        self.applied_tactics = []
 
     def apply_tactic(self, tactic):
+        self.applied_tactics.append(tactic)
         success, error = self.outcomes.pop(0)
         self.last_error = error
         if success:
@@ -109,7 +112,8 @@ class GoalChangingCoq(SequencedCoq):
 
     def apply_tactic(self, tactic_text):
         success = super().apply_tactic(tactic_text)
-        self.goal = "next target"
+        if success:
+            self.goal = "next target"
         return success
 
 
@@ -170,7 +174,44 @@ def test_one_rocq_error_returns_the_tactic_diagnostic_and_current_tree():
     feedback = controller.context_manager.prompts[1]
     assert "apply missing_lemma." in feedback
     assert "The reference missing_lemma was not found" in feedback
+    assert "Analyze the Rocq error and generate a corrected tactic." in feedback
     assert "## CURRENT PROOF TREE:\n" + TREE in feedback
+
+
+def test_single_error_feedback_drives_a_corrected_tactic_and_updated_tree():
+    controller = make_controller(
+        [tactic("apply missing_lemma"), tactic("assumption"), give_up()],
+        [],
+    )
+    controller.coq = GoalChangingCoq()
+    controller.coq.outcomes = [
+        (False, "The reference missing_lemma was not found"),
+        (True, None),
+    ]
+    controller.proof_tree = ProofTree()
+    controller.proof_tree.add_node(
+        tactic="Proof.",
+        goals_before="target",
+        goals_after="target",
+        hypotheses_before="H: premise",
+        hypotheses_after="H: premise",
+        step_number=0,
+        subgoals_after=["target"],
+    )
+    controller.enable_recording = False
+    controller.recorder = None
+
+    run(controller)
+
+    assert controller.coq.applied_tactics == ["apply missing_lemma.", "assumption."]
+    assert "Analyze the Rocq error and generate a corrected tactic." in (
+        controller.context_manager.prompts[1]
+    )
+    assert controller.proof_tree.root.children[0].tactic == "assumption."
+    assert controller.proof_tree.open_subgoals[0].goals_after == "next target"
+    assert "## CURRENT PROOF TREE:" in controller.context_manager.prompts[2]
+    assert "assumption." in controller.context_manager.prompts[2]
+    assert "next target" in controller.context_manager.prompts[2]
 
 
 def test_disabling_error_feedback_hides_diagnostics_and_error_escalation_only():
@@ -198,7 +239,7 @@ def test_disabling_error_feedback_hides_diagnostics_and_error_escalation_only():
     )
 
 
-def test_three_repeats_of_the_same_error_request_context_then_return_its_result():
+def test_three_repeats_prompt_for_context_and_return_the_query_result():
     error = "The reference needed_lemma was not found"
     controller = make_controller(
         [
@@ -206,10 +247,25 @@ def test_three_repeats_of_the_same_error_request_context_then_return_its_result(
             tactic("apply candidate_two"),
             tactic("apply candidate_three"),
             query("Search (_ <= Z.abs _)."),
+            tactic("apply needed_lemma"),
             give_up(),
         ],
-        [error, error, error],
+        [],
     )
+    controller.coq = SequencedCoq([
+        (False, error),
+        (False, error),
+        (False, error),
+        (True, None),
+    ])
+    controller._handle_successful_tactic = lambda *args: {
+        "tactic": args[0],
+        "goals_before": args[3],
+        "goals_after": args[4],
+        "hypotheses_before": args[5],
+        "hypotheses_after": args[6],
+        "step_number": controller.global_step_id,
+    }
 
     run(controller)
 
@@ -218,12 +274,36 @@ def test_three_repeats_of_the_same_error_request_context_then_return_its_result(
     assert "3 consecutive occurrences" in escalation
     assert "call the `query` tool" in escalation
     assert "## CURRENT PROOF TREE:\n" + TREE in escalation
+    assert "1. apply candidate_one." in escalation
+    assert "2. apply candidate_two." in escalation
+    assert "3. apply candidate_three." in escalation
     assert controller.query_commands == ["Search (_ <= Z.abs _)."]
     assert "query result" in controller.context_manager.prompts[4]
+    assert controller.coq.applied_tactics == [
+        "apply candidate_one.",
+        "apply candidate_two.",
+        "apply candidate_three.",
+        "apply needed_lemma.",
+    ]
+
+
+def test_feedback_loop_stops_at_the_configured_tactic_attempt_limit():
+    controller = make_controller(
+        [tactic(f"fail_{index}") for index in range(3)],
+        ["error"] * 3,
+    )
+    controller.max_steps = 3
+    controller.max_errors = 10
+
+    events = run(controller)
+
+    assert controller.gen_step_count == 3
+    assert controller.failed_tactics == ["fail_0.", "fail_1.", "fail_2."]
+    assert events[-1] == {"type": "done", "success": False}
 
 
 @pytest.mark.parametrize("threshold", [1, 3, 5])
-def test_context_search_starts_at_the_configured_same_error_threshold(threshold):
+def test_persistent_error_prompt_starts_at_the_configured_threshold(threshold):
     error = "The reference needed_lemma was not found"
     controller = make_controller(
         [tactic(f"apply candidate_{index}") for index in range(threshold)]
@@ -241,6 +321,8 @@ def test_context_search_starts_at_the_configured_same_error_threshold(threshold)
     )
     assert "## PERSISTENT ERROR" in failure_feedback[-1]
     assert f"{threshold} consecutive occurrences" in failure_feedback[-1]
+    for index in range(threshold):
+        assert f"{index + 1}. apply candidate_{index}." in failure_feedback[-1]
 
 
 def test_persistent_errors_do_not_request_an_unavailable_query_tool():
@@ -415,3 +497,30 @@ def test_successful_proof_records_the_complete_state_transition():
             "theorem_name": "paper_example",
         }
     ]
+
+
+def test_only_a_completed_proof_is_added_to_the_success_archive(tmp_path):
+    controller = ProofController.__new__(ProofController)
+    controller.current_theorem_name = "paper_example"
+    controller.output_dir = str(tmp_path)
+    controller.coq = SimpleNamespace(file_path=str(tmp_path / "paper_example.v"))
+    controller.proof_tree = SimpleNamespace(
+        save_to_png=Mock(),
+        save_to_json=Mock(),
+    )
+    controller.enable_recording = False
+    controller.recorder = None
+    controller.gen_step_count = 1
+    controller.max_steps = 10
+    controller.give_up = False
+    controller.logger = Mock()
+    controller._record_successful_proof = Mock()
+    states = [{"tactic": "assumption."}]
+
+    controller.is_successful = False
+    controller._finish_proof(states)
+    controller._record_successful_proof.assert_not_called()
+
+    controller.is_successful = True
+    controller._finish_proof(states)
+    controller._record_successful_proof.assert_called_once_with(states)

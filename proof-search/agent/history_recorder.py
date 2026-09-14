@@ -109,11 +109,12 @@ class TacticHistoryManager:
         theorem_name: str,
         hypotheses_before: str = "",
         hypotheses_after: str = "",
+        step_number: Optional[int] = None,
     ) -> str:
         """Create a unique signature for a tactic entry to detect duplicates.
         
-        Only treat entries as duplicates when their complete proof context and
-        theorem provenance are identical.
+        Only treat entries as duplicates when their complete proof context,
+        theorem provenance, and tactic ID are identical.
         """
         try:
             # Normalize inputs by stripping whitespace and converting to lowercase
@@ -123,6 +124,7 @@ class TacticHistoryManager:
             hypotheses_before_clean = hypotheses_before.strip().lower()
             hypotheses_after_clean = hypotheses_after.strip().lower()
             theorem_name_clean = theorem_name.strip().lower()
+            step_number_clean = "" if step_number is None else str(step_number)
 
             signature = "|||".join([
                 tactic_clean,
@@ -131,6 +133,7 @@ class TacticHistoryManager:
                 hypotheses_before_clean,
                 hypotheses_after_clean,
                 theorem_name_clean,
+                step_number_clean,
             ])
 
             return signature
@@ -148,13 +151,13 @@ class TacticHistoryManager:
         theorem_name: str, 
         hypotheses_before: str = "",
         hypotheses_after: str = "",
-        step_number: int = None,
+        step_number: Optional[int] = None,
         source: str = "agent"
     ):
         """Add a successful tactic to history, avoiding duplicates.
         
         Only skips entries when the tactic, complete before/after state, and
-        theorem provenance are identical.
+        provenance are identical.
         """
         try:
             # Create tactic signature for duplicate checking
@@ -165,12 +168,13 @@ class TacticHistoryManager:
                 theorem_name,
                 hypotheses_before,
                 hypotheses_after,
+                step_number,
             )
             
             # Check for duplicate using the signature set (O(1) lookup)
             if signature in self._tactic_signatures:
                 self.logger.debug(f"🔄 Skipping exact duplicate: {tactic.strip()}")
-                self.logger.debug(f"   - Same tactic with identical before/after states already exists")
+                self.logger.debug(f"   - Identical tactic history record already exists")
                 return
             
             entry = TacticHistoryEntry(
@@ -379,6 +383,7 @@ class TacticHistoryManager:
                     entry.theorem_name,
                     entry.hypotheses_before,
                     entry.hypotheses_after,
+                    entry.step_number,
                 )
                 self._tactic_signatures.add(signature)
 

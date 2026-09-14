@@ -72,12 +72,13 @@ def test_added_tactics_survive_a_save_and_reload(tmp_path):
 
 def test_only_an_exact_repeat_counts_as_a_duplicate(manager):
     """Only the same transition in the same theorem is a duplicate."""
-    def add(tactic, before, after, theorem="t"):
+    def add(tactic, before, after, theorem="t", step=None):
         manager.add_successful_tactic(
             tactic=tactic,
             goals_before=before,
             goals_after=after,
             theorem_name=theorem,
+            step_number=step,
         )
 
     add("lia.", "0 <= n", "")
@@ -94,9 +95,14 @@ def test_only_an_exact_repeat_counts_as_a_duplicate(manager):
     add("lia.", "0 <= n", "n = 0", theorem="second")
     assert len(manager.entries) == 5
 
+    # A tactic ID identifies a distinct record within the proof sequence.
+    add("lia.", "0 <= n", "", step=1)
+    add("lia.", "0 <= n", "", step=2)
+    assert len(manager.entries) == 7
+
     stats = manager.get_statistics()
-    assert stats["total_entries"] == 5
-    assert stats["unique_signatures"] == 5
+    assert stats["total_entries"] == 7
+    assert stats["unique_signatures"] == 7
     assert stats["theorems_covered"] == 3
     assert stats["unique_tactics"] == 2, stats["most_common_tactics"]
 

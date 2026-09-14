@@ -551,6 +551,7 @@ class ProofController:
                             tactic_content,
                             failed_error,
                             persistent_error_count,
+                            error_tactics,
                         )
                         yield {'type': 'tactic', 'tactic': tactic_content, 'success': False,
                                'error': failed_error, 'goals_after': goals_before, 'proof_complete': False}
@@ -928,6 +929,7 @@ class ProofController:
         tactic: str,
         error: str,
         persistent_error_count: int,
+        failed_tactics: List[str],
     ) -> str:
         """Build the Section 4.3 feedback for one failed tactic."""
         if self.enable_error_feedback:
@@ -935,6 +937,7 @@ class ProofController:
                 f"The previous tactic failed to apply.\n"
                 f"Tactic: {tactic}\n"
                 f"Rocq error: {error}\n"
+                "Analyze the Rocq error and generate a corrected tactic.\n"
             )
             prompt += hints_from_error(tactic, error)
         else:
@@ -953,11 +956,16 @@ class ProofController:
             and context_search_enabled
             and persistent_error_count >= self.max_errors
         ):
+            failed_tactics_text = "\n".join(
+                f"{index}. {failed_tactic}"
+                for index, failed_tactic in enumerate(failed_tactics, 1)
+            )
             prompt += (
                 "\n## PERSISTENT ERROR\n"
                 f"The same Rocq error has persisted for "
                 f"{persistent_error_count} consecutive occurrences. "
-                "Analyze the failed attempts and current proof tree, then "
+                "Analyze these failed tactics and the current proof tree:\n"
+                f"{failed_tactics_text}\n"
                 "call the `query` tool to retrieve the missing context before "
                 "trying another tactic.\n"
             )
