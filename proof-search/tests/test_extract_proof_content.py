@@ -229,3 +229,89 @@ def test_coqpyt_context_deduplicates_an_inductive_and_its_constructor(tmp_path):
 
     assert extracted.count("Inductive addr") == 1
     assert extracted.count("addr'mk : nat -> addr") == 1
+
+
+class RecordingLogger:
+    """setup_logger sets propagate=False, so caplog never sees these records."""
+
+    def __init__(self):
+        self.warnings = []
+
+    def warning(self, message, *args):
+        self.warnings.append(message % args if args else message)
+
+    def debug(self, message, *args):
+        pass
+
+    def info(self, message, *args):
+        pass
+
+    error = warning
+
+
+def test_declaration_pattern_covers_attributes_and_proof_declarations():
+    """The forms the fallback must recognize, and the ones it knowingly skips."""
+    from utils.coq_utils import DECLARATION_PATTERN
+
+    for source, name in [
+        ("Definition foo := 1.", "foo"),
+        ("Local Definition g := 1.", "g"),
+        # Rocq 9 writes locality as an attribute rather than a keyword.
+        ("#[local] Definition foo := 1.", "foo"),
+        ("#[global] Instance bar : Eq := {}.", "bar"),
+        ("#[export, refine] Instance i : T := {}.", "i"),
+        # A proof may depend on a lemma proved earlier in the same file.
+        ("Theorem helper : True.", "helper"),
+        ("Lemma helper2 : True.", "helper2"),
+        ("Corollary c : True.", "c"),
+        ("Proposition p : True.", "p"),
+        ("Remark r : True.", "r"),
+        ("Fact f : True.", "f"),
+    ]:
+        match = DECLARATION_PATTERN.match(source)
+        assert match is not None, f"{source!r} was not recognized"
+        assert match.group(1) == name, f"{source!r} bound {match.group(1)!r}"
+
+    # Known gaps. The parsed context covers these.
+    for source in [
+        "Program Definition baz := 1.",
+        "Ltac t := auto.",
+        "Let l := 1.",
+        "Notation \"x +++ y\" := (plus x y).",
+    ]:
+        assert DECLARATION_PATTERN.match(source) is None, (
+            f"{source!r} now matches; move it up to the recognized list"
+        )
+
+
+def test_the_text_fallback_announces_itself():
+    """Degrading to regex scanning must not be silent."""
+    logger = RecordingLogger()
+    extract_essential_proof_content(
+        logger, "Theorem t : True.\nProof.\nAdmitted.\n"
+    )
+
+    assert len(logger.warnings) == 1
+    warning = logger.warnings[0]
+    assert "falling back to" in warning
+    # Must name what was missing: the caller passes all three as getattr.
+    assert "proof" in warning and "file_context" in warning and "file_path" in warning
+
+
+def test_the_goal_is_not_emitted_as_its_own_dependency():
+    """The pattern matches Theorem/Lemma, so the goal lands in all_definitions
+    too and can come out twice."""
+    source = "\n".join(
+        [
+            "From Stdlib Require Import ZArith.",
+            "Definition is_small (x:Z) : Prop := (0 <= x)%Z.",
+            "Theorem wp_goal : forall (x:Z), is_small x -> (0 <= x)%Z.",
+            "Proof.",
+            "Admitted.",
+        ]
+    )
+
+    extracted = extract(source)
+
+    assert extracted.count("Theorem wp_goal") == 1
+    assert "Definition is_small" in extracted
