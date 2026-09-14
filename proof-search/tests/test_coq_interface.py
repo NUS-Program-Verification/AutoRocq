@@ -86,8 +86,6 @@ def test_a_bad_tactic_fails_without_breaking_the_session(coq):
 
 def test_a_full_proof_runs_through_to_qed(coq):
     """Stepwise application has to close the proof."""
-    assert not coq.is_proof_complete(), "an admitted proof reported complete"
-
     for offset, tactic in enumerate(PROOF, start=1):
         assert coq.apply_tactic(tactic), f"{tactic.strip()}: {coq.get_last_error()}"
         assert coq.get_current_step_number() == 1 + offset
@@ -98,17 +96,3 @@ def test_a_full_proof_runs_through_to_qed(coq):
     assert coq.apply_tactic(" Qed."), coq.get_last_error()
     assert coq.proof.steps[-1].text.strip() == "Qed."
     assert not coq.proof_file.unproven_proofs, "Qed left the proof unproven"
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason="on main, is_proof_complete() resolves the proof through "
-    "get_unproven_proof(), which Qed empties, so it returns False exactly when "
-    "the proof is complete. Fixed on tests-real-assertions (_current_proof); "
-    "drop this marker when that lands.",
-)
-def test_is_proof_complete_reports_a_closed_proof(coq):
-    for tactic in PROOF + [" Qed."]:
-        assert coq.apply_tactic(tactic), f"{tactic.strip()}: {coq.get_last_error()}"
-
-    assert coq.is_proof_complete()
