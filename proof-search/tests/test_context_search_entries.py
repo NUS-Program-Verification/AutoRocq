@@ -7,11 +7,6 @@ so the size bands stay deterministic; the gap that leaves is that nothing
 checks _parse_search_entries against text Rocq really emitted. That is what
 this file does, together with ContextSearch.search/execute_coq_query, which
 test_context_search.py never touches.
-
-The old version pointed at examples/match_string_assert.v, a fixture that has
-never been committed, so it skipped on every run. Even when it did not, it
-caught every failure inside its own loop, printed the traceback and carried on,
-then returned True -- which pytest ignores.
 """
 
 import sys
@@ -90,9 +85,8 @@ def test_ranking_reorders_real_entries_without_losing_any(coq):
 def test_search_dispatches_a_raw_command(coq):
     """A raw Rocq command goes through search() and comes back answered.
 
-    This used to compare ContextSearch.search against CoqCommandSearch.auto_search
-    to pin the wrapper as a pass-through; the two classes are one now, so there is
-    no indirection left to pin -- only that the dispatch still reaches Rocq.
+    ContextSearch and CoqCommandSearch are one class, so there is no
+    indirection to pin here -- only that the dispatch still reaches Rocq.
     """
     result = ContextSearch(coq).search("Print bool.")
 
