@@ -1,18 +1,4 @@
-"""
-coqpyt's append_step/pop_step contract, driven straight through ProofFile.
-
-The old version appended one hard-coded proof twice, swallowed
-InvalidChangeException with a print, and asserted nothing -- so it passed
-whether or not coqpyt accepted a single step. It also carried two dead tactic
-lists (`incorrect`/`correct` built from `rewrite app_assoc`) that were
-overwritten before use.
-
-`current_goals` is a GoalAnswer, and its truthiness says nothing: it is a live
-object even when the proof is finished, and str() of it is "No more goals."
-rather than "". Every "is the proof done yet" check here goes through
-open_goals() instead. The old `if not proof_file.current_goals:` idiom -- still
-present in a few sibling tests -- can never fire.
-"""
+"""coqpyt's append_step/pop_step contract, driven straight through ProofFile."""
 
 import sys
 from pathlib import Path
@@ -26,10 +12,8 @@ from coqpyt.coq.exceptions import InvalidChangeException
 from coqpyt.coq.proof_file import ProofFile
 from tests.test_utils import temp_example_copy
 
-# example.v admits `forall b : bool, orb true b = true`. `orb true b` reduces
-# on its first argument, so plain `reflexivity.` closes the whole thing; this
-# sequence takes the long way through both branches of the destruct, which is
-# what makes the intermediate goal counts below worth asserting.
+# `reflexivity.` alone closes example.v's goal; this route goes through both
+# destruct branches, so the intermediate goal counts below are worth asserting.
 CORRECT_PROOF = [
     "  intros b.",
     "  destruct b.",
@@ -45,7 +29,12 @@ EXPECTED_OPEN_GOALS = [1, 2, 2, 1, 1, 0]
 
 
 def open_goals(proof_file):
-    """The goals actually left to prove."""
+    """The goals left to prove.
+
+    `current_goals` is a GoalAnswer: always truthy, and str() of it is
+    "No more goals." rather than "", so neither can stand in for "is the
+    proof done yet".
+    """
     return proof_file.current_goals.goals.goals
 
 

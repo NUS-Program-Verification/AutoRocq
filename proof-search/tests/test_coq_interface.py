@@ -1,12 +1,4 @@
-"""
-CoqInterface's core surface, against a real coq-lsp session on examples/example.v.
-
-Every line of this file used to sit under `if __name__ == "__main__":`, so
-pytest collected nothing from it and none of these calls were checked by a test
-run. The tactic list had gone stale along the way -- it introduced two nat
-variables (`intros n m.`) and rewrote with `plus_O_n` for a lemma that takes a
-single bool.
-"""
+"""CoqInterface's core surface, against a real coq-lsp session on examples/example.v."""
 
 import sys
 from pathlib import Path
@@ -19,6 +11,19 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from backend.coq_interface import CoqInterface
 from coqpyt.coq.structs import TermType
 from tests.test_utils import temp_example_copy
+
+# example.v's goal reduces on `orb`'s first argument, so `reflexivity.` alone
+# would close it; going through both destruct branches exercises more of
+# apply_tactic's step bookkeeping on the way to Qed.
+PROOF = [
+    " intros b.",
+    " destruct b.",
+    " simpl.",
+    " reflexivity.",
+    " simpl.",
+    " reflexivity.",
+]
+
 
 @pytest.fixture
 def coq():
@@ -77,3 +82,31 @@ def test_a_bad_tactic_fails_without_breaking_the_session(coq):
     # The session must still accept a good tactic afterwards.
     assert coq.apply_tactic(" intros b."), coq.get_last_error()
     assert coq.get_current_step_number() == steps_before + 1
+
+
+def test_a_full_proof_runs_through_to_qed(coq):
+    """Stepwise application has to close the proof."""
+    assert not coq.is_proof_complete(), "an admitted proof reported complete"
+
+    for offset, tactic in enumerate(PROOF, start=1):
+        assert coq.apply_tactic(tactic), f"{tactic.strip()}: {coq.get_last_error()}"
+        assert coq.get_current_step_number() == 1 + offset
+
+    # Goals are exhausted, but the proof is not closed until Qed lands.
+    assert "No more goals." in coq.get_goal_str(), coq.get_goal_str()
+
+    assert coq.apply_tactic(" Qed."), coq.get_last_error()
+    assert coq.proof.steps[-1].text.strip() == "Qed."
+    assert not coq.proof_file.unproven_proofs, "Qed left the proof unproven"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="is_proof_complete() reads unproven_proofs[0], which Qed removes, so it "
+    "returns False exactly when the proof is complete",
+)
+def test_is_proof_complete_reports_a_closed_proof(coq):
+    for tactic in PROOF + [" Qed."]:
+        assert coq.apply_tactic(tactic), f"{tactic.strip()}: {coq.get_last_error()}"
+
+    assert coq.is_proof_complete()

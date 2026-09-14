@@ -2,13 +2,6 @@
 reset_by_step(): popping the proof back to an earlier step and replaying
 forward. This is what the controller runs when the LLM walks into a dead end,
 so "the state after rollback is the state we recorded" is the whole contract.
-
-The old version printed that contract instead of asserting it -- "⚠️ Step count
-mismatch: expected 4, got 6", "⚠️ State mismatch (may be normal due to
-formatting)" -- and returned True at the end whatever it had printed. It also
-`continue`d past any rollback target it decided was invalid, so a reset_by_step
-that refused every call still finished with "🎉 All rollback tests completed
-successfully!".
 """
 
 import sys
@@ -40,13 +33,11 @@ FIRST_TACTIC_STEP = 2
 def replayed():
     """One session with all five tactics applied, plus the state after each.
 
-    Module-scoped because loading this goal file dominates the runtime. The
-    tests below run in order against it: they roll the same session back and
-    forward, which is exactly the behaviour under test.
-
-    The file is left as the tracked copy -- load() pops the trailing
-    "Admitted." itself, and rewriting it first would only cost a cold
-    re-elaboration by changing what coqpyt's disk cache is keyed on.
+    Module-scoped because loading this goal file dominates the runtime; the
+    tests below roll the same session back and forward, which is the behaviour
+    under test. load() pops the trailing "Admitted." itself, so the file is
+    left alone -- rewriting it would only force a cold re-elaboration by
+    changing what coqpyt's disk cache is keyed on.
     """
     config = configure_test_library(ProofAgentConfig.from_file(str(config_file)))
 

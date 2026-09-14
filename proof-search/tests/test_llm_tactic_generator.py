@@ -2,16 +2,10 @@
 ContextManager: what it wires up at construction, and the initial prompt it
 builds for the model.
 
-Each test used to collect its checks into a dict, print a tick or a cross per
-entry, and return the conjunction. pytest ignores that return, so a
-ContextManager with no chat session, no history and no model passed exactly
-like a working one -- as did the `except Exception` paths, which returned False
-after printing a traceback.
-
 These stay behind the `llm` marker. Nothing here calls the API -- ContextManager
 and CoqChatSession only assemble a system prompt at construction -- but the
-marker was added deliberately after a plain `pytest` run was seen billing for
-real, so unmarking it is a decision for whoever owns the key, not this cleanup.
+marker was added after a plain `pytest` run was seen billing for real, so
+unmarking it is a decision for whoever owns the key.
 """
 
 import os

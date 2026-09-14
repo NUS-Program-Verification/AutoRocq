@@ -2,11 +2,7 @@
 TacticHistoryManager: recording tactics, the duplicate filter, and the
 save/reload round trip.
 
-This file used to be a __main__ debug script -- pytest collected nothing from
-it -- and its first act was `history_file.unlink()` on
-proof-search/data/tactic_history.json, the agent's own accumulated history.
-Everything here writes under tmp_path instead.
-
+Everything here writes under tmp_path, never the agent's own history file.
 The one live-Rocq test records a tactic applied through CoqInterface, which is
 what the agent actually does; the rest are pure unit tests on the manager.
 Retrieval (get_similar_history) has its own file, test_get_similar_history.py.

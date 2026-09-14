@@ -5,13 +5,6 @@ coqpyt's ProofFile, with no CoqInterface in the way.
 What this pins that the CoqInterface test does not is that the libframac
 realizations resolve from the workspace's _CoqProject alone -- if they do not,
 `wp_goal` never typechecks and coqpyt fails to open a proof at all.
-
-The old version tallied `successful_steps`/`failed_steps`, then decided
-completion from `failed_steps == 0 and successful_steps > 0 and has_qed`,
-printed the verdict, and returned it -- which pytest discards. Its
-`if not current_goals:` check could never fire either: `current_goals` is a
-GoalAnswer object that stays truthy after the last goal is closed. The only
-`assert` in the file sat in the `__main__` block, unreachable under pytest.
 """
 
 import sys

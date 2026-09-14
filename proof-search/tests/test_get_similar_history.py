@@ -2,15 +2,9 @@
 TacticHistoryManager.get_similar_history(): the retrieval that puts previously
 successful tactics in front of the model.
 
-The old version ran against proof-search/data/tactic_history.json -- gitignored
-local state that only exists once someone has proved something on that machine
--- and returned True early when the file was missing or empty, False from its
-`except`, and `len(similar) > 0` otherwise. pytest ignores all three, so it
-passed whether the retrieval worked, returned nothing, or threw. On a fresh
-checkout it never reached the function at all.
-
-The corpus here is built in the test instead, so the ranking is actually
-pinned rather than depending on what the machine happens to have proved.
+The corpus is built in the test rather than read from the agent's own history
+file, so the ranking is pinned instead of depending on what the machine
+happens to have proved.
 """
 
 import sys

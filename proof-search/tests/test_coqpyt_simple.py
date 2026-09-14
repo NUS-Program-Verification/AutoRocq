@@ -2,13 +2,6 @@
 Goal tracking through coqpyt on a proof reset to `Proof. Admitted.` by
 tests/test_utils, covering the reset/pop-terminator path the agent uses before
 it starts proving.
-
-The old version counted how many append_step calls did not raise, printed
-"RESULT: n tactics applied" and returned `successful > 0` -- which pytest
-ignores. Every `except` in the loop was a `break` with a print, so a session
-that rejected everything after the first step still reported success. Its
-"No more goals!" check tested `str(goals)`, which is never empty, so it never
-fired either.
 """
 
 import sys
@@ -36,12 +29,10 @@ def open_goals(proof_file):
 
 @pytest.fixture
 def open_proof():
-    """An open proof on example.v with its terminator popped off.
+    """An open proof on a throwaway copy of example.v, terminator popped off.
 
-    Works on a throwaway copy: this rewrites the file to "Proof. Admitted."
-    and coqpyt writes every appended tactic back to it, so pointing it at the
-    tracked example would leave the working tree dirty whenever the restore
-    below is skipped (SIGKILL, CI timeout, OOM).
+    A copy because this rewrites the file and coqpyt writes every appended
+    tactic back to it; the restore below is skipped on SIGKILL or timeout.
     """
     file_path = temp_example_copy("example.v")
     assert reset_coq_file_to_admitted(file_path, backup=True), (

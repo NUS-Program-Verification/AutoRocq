@@ -167,12 +167,6 @@ def test_folder_batch(tmp_path):
     This is the ablation experiment, not a unit test: it runs the whole agent
     over ~70 benchmark goals and costs real API time. It stays behind the `llm`
     marker for that reason.
-
-    The old version counted proved/failed, printed a success rate, and returned
-    `proved_count > 0` -- which pytest ignores. A run in which every single goal
-    failed, or in which the lemma list resolved to nothing, passed exactly like
-    a clean sweep. It also wrote its results under the repo's results/ rather
-    than into a temp directory.
     """
     assert config_file.exists(), f"config not found: {config_file}"
     config = ProofAgentConfig.from_file(str(config_file))
