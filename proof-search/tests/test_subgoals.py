@@ -1,11 +1,6 @@
 """
 get_subgoals(): the structured view of the proof state that ProofController
 diffs to decide how the proof tree branches.
-
-The old version printed a before/after dump and a running commentary --
-"❌ RESULT: Goals strings are IDENTICAL", "✅ RESULT: Added 6 new hypotheses" --
-and returned True at the end regardless of which of those it had printed. Every
-one of those comparisons is an assertion here instead.
 """
 
 import sys
@@ -102,14 +97,9 @@ def test_intros_moves_every_binder_into_the_hypotheses(coq):
 def test_get_hypothesis_renders_the_focused_context(coq):
     """The context comes off the goals; the proof's steps never carried it.
 
-    get_raw_hypothesis() used to read `hypotheses` or `context` off the proof's
-    last step. A ProofStep has no `hypotheses`, and its `context` is a
-    List[Term] -- the definitions and notations that step referenced, never the
-    proof's hypotheses. So the second branch was taken and returned either ""
-    (empty list, which is what this goal file gives, and what put
-    "Hypotheses: None" in every prompt) or a rendering of whatever terms the
-    step happened to touch, labelled as the context. Hypotheses have only ever
-    been on the goals: goals.goals[i].hyps, which is what get_subgoals() reads.
+    Hypotheses live on `goals.goals[i].hyps`, which is what get_subgoals()
+    reads. A ProofStep has no `hypotheses`, and its `context` is a List[Term]
+    -- the definitions a step referenced, not the proof's hypotheses.
     """
     focused = coq.get_subgoals()[0]
     assert focused.hyps, "the context is gone; this test is moot"
