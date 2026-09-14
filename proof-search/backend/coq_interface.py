@@ -338,9 +338,7 @@ class CoqInterface:
         """One line per hypothesis of a coqpyt Goal, the way Rocq prints them.
 
         A let-bound hypothesis carries its body in Hyp.definition and reads
-        "y := true : bool"; dropping it would leave the model the type of a
-        value it cannot see, which is the difference between knowing `subst`
-        will fire and guessing.
+        "y := true : bool"; the body is kept.
         """
         lines = []
         for hyp in getattr(goal, 'hyps', None) or []:
@@ -357,14 +355,8 @@ class CoqInterface:
     def get_raw_hypothesis(self):
         """Return the context of the focused goal, one hypothesis per line.
 
-        The context lives on the goals, not on the proof's steps. This used to
-        read `hypotheses` or `context` off proof.steps[-1], but a coqpyt Step
-        carries only text/short_text/ast/diagnostics, so neither branch was ever
-        taken and every caller got "" -- including the prompt, which said
-        "Hypotheses: None" for a proof state with a full context.
-
-        Backgrounded goals are left out: this is the state the next tactic acts
-        on. get_subgoals() is there for the rest.
+        The context lives on the goals, not on the proof's steps. Backgrounded
+        goals are left out; get_subgoals() is there for the rest.
         """
         try:
             subgoals = self.get_subgoals()
