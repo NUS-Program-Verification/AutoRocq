@@ -1280,13 +1280,7 @@ class CoqInterface:
             }
 
     def is_ready_for_qed(self) -> bool:
-        """Whether the proof could be closed now. Does not touch the file.
-
-        This used to answer the question by appending Qed and keeping it, so
-        everything that merely asked also changed the proof --
-        get_proof_completion_status() included. Applying the terminator is
-        apply_qed()'s job; this only reports whether it is worth trying.
-        """
+        """Whether the proof could be closed now, without changing the file."""
         try:
             proof = self._current_proof()
             if not proof or not proof.steps:
@@ -1336,8 +1330,7 @@ class CoqInterface:
             
             except Exception as qed_error:
                 # Rocq refused the terminator: unresolved evars, a guard
-                # condition it cannot check. Record why -- this used to be
-                # dropped, leaving "not complete" with no reason anywhere.
+                # condition it cannot check, or another incomplete obligation.
                 self.last_error = f"Qed refused: {qed_error}"
                 self.logger.info(f"❌ Qed refused: {qed_error}")
 
