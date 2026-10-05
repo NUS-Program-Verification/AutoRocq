@@ -1,19 +1,4 @@
-"""
-ResultReducer's entry ranking: the two signals that never fired.
-
-_rank_entries scores parsed search entries against the goal -- keyword hits in
-the name, signature and module, a bonus for short names, a bonus for the
-standard library, and a decay for entries already handed back. Two of those
-were dead.
-
-The stdlib bonus lowercased the module and then compared it against
-['Z', 'Nat', 'List', 'Bool', 'Arith'], so it could not match. The decay counted
-retrievals under hash(frozenset(entry.items())) in _structured_summarization and
-looked them up under md5(name) in _rank_entries -- different key spaces, so
-hit_count was always 0 and every search came back with the same top ten.
-
-No Rocq process: ranking is pure text work.
-"""
+"""ResultReducer ranking by relevance, origin, and per-session repetition."""
 
 import sys
 from pathlib import Path
