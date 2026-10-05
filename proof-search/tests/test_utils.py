@@ -1,4 +1,3 @@
-import atexit
 import inspect
 import os
 import shutil
@@ -114,8 +113,7 @@ def get_example_file() -> Path:
     return PROJECT_ROOT / "examples" / "example.v"
 
 
-TEMP_EXAMPLE_ROOT = Path(tempfile.mkdtemp(prefix="autorocq-test-examples-"))
-atexit.register(shutil.rmtree, TEMP_EXAMPLE_ROOT, ignore_errors=True)
+TEMP_EXAMPLE_ROOT = Path(tempfile.gettempdir()) / "autorocq-test-examples"
 
 
 def temp_example_copy(name: str) -> Path:
@@ -124,8 +122,7 @@ def temp_example_copy(name: str) -> Path:
 
     Tests must never run against the tracked files in examples/.
 
-    The copy lives under a process-owned directory so concurrent pytest runs
-    cannot rewrite files underneath each other's CoqPyt sessions.
+    The stable destination lets CoqPyt reuse its library cache across test runs.
 
     examples/_CoqProject is copied alongside it when present. Tests that use a
     bare ProofFile must otherwise create their own project file.

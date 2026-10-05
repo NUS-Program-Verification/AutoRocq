@@ -116,6 +116,7 @@ def test_llm_proof_generation_with_controller():
         
         # Load configuration from file
         config = configure_test_library(ProofAgentConfig.from_file(str(config_file)))
+        config.llm.api_key = config.llm.api_key or os.getenv("OPENAI_API_KEY")
         if not config.llm.api_key:
             pytest.skip("requires an LLM API key")
         print(f"✅ Loaded configuration from {config_file}")

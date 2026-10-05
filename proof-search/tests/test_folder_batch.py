@@ -161,13 +161,9 @@ def prove_single_file(
     return False
 
 @pytest.mark.llm
+@pytest.mark.experiment
 def test_folder_batch(tmp_path):
-    """Prove every .v file listed in the ablation list and check the tally.
-
-    This is the ablation experiment, not a unit test: it runs the whole agent
-    over ~70 benchmark goals and costs real API time. It stays behind the `llm`
-    marker for that reason.
-    """
+    """Run the full ablation experiment and check the result tally."""
     assert config_file.exists(), f"config not found: {config_file}"
     config = ProofAgentConfig.from_file(str(config_file))
 
@@ -197,10 +193,8 @@ def test_folder_batch(tmp_path):
     proved = [name for name, ok in outcomes.items() if ok]
     print(f"\n{len(proved)}/{len(v_files)} proved")
 
-    # Every listed file was attempted and got a verdict.
     assert len(outcomes) == len(v_files)
 
-    # Every attempt left a saved artefact, whether or not it was proved.
     saved = list(results_dir.iterdir())
     assert saved, "no results were written"
 

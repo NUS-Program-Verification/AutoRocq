@@ -55,6 +55,7 @@ def test_prove_theorem():
         # Load configuration
         print("📖 Step 2: Load configuration")
         config = configure_test_library(ProofAgentConfig.from_file(str(config_file)))
+        config.llm.api_key = config.llm.api_key or os.getenv("OPENAI_API_KEY")
         if not config.llm.api_key:
             pytest.skip("requires an LLM API key")
         print(f"✅ Configuration loaded")

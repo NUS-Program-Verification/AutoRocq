@@ -82,8 +82,6 @@ def test_walking_both_branches_closes_the_proof(open_proof):
             f"expected {expected_open}"
         )
 
-    # One branch is still open at this point -- the old test stopped here and
-    # called it a success.
     assert open_goals(proof_file), "all four tactics closed the whole proof"
 
     for tactic in ["  simpl.", "  reflexivity."]:

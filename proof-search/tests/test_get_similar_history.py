@@ -68,7 +68,6 @@ def test_results_are_capped_and_ordered_by_score(manager):
     assert scores == sorted(scores, reverse=True), scores
     assert all(0.0 <= score <= 1.0 for score in scores), scores
 
-    # Asking for more than exists returns everything, not padding.
     everything = manager.get_similar_history("0 <= Z.abs i", n=99)
     assert len(everything) == len(CORPUS)
     assert len({entry["tactic"] for entry in everything}) == len(CORPUS)

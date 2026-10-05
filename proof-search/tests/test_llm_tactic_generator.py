@@ -1,12 +1,4 @@
-"""
-ContextManager: what it wires up at construction, and the initial prompt it
-builds for the model.
-
-These stay behind the `llm` marker. Nothing here calls the API -- ContextManager
-and CoqChatSession only assemble a system prompt at construction -- but the
-marker was added after a plain `pytest` run was seen billing for real, so
-unmarking it is a decision for whoever owns the key.
-"""
+"""ContextManager construction and initial-prompt behavior."""
 
 import os
 import sys
@@ -25,19 +17,15 @@ from utils.config import ProofAgentConfig
 
 config_file = PROJECT_ROOT / "configs" / "default_config.json"
 
-# conftest.py skips these unless --runllm is passed.
 pytestmark = pytest.mark.llm
 
 
 @pytest.fixture
 def config():
-    """Config used by the tests below; they only read config.llm.api_key.
-
-    Skips rather than fails when no key is configured: --runllm asks for these
-    to run, but an unconfigured checkout should not go red for it.
-    """
+    """Load a config with an API key available to ContextManager."""
     loaded = ProofAgentConfig.from_file(str(config_file))
-    if not (getattr(loaded.llm, "api_key", None) or os.getenv("OPENAI_API_KEY")):
+    loaded.llm.api_key = loaded.llm.api_key or os.getenv("OPENAI_API_KEY")
+    if not loaded.llm.api_key:
         pytest.skip("needs an LLM API key")
     return loaded
 
@@ -63,7 +51,6 @@ def test_context_manager_wires_up_its_collaborators(config, coq):
     assert cm.chat_session.model == cm.model or cm.chat_session.model.endswith(cm.model)
     assert cm.context_search is not None, "context search failed to initialise"
 
-    # The chat session opens with a system prompt and the tools it advertises.
     assert cm.chat_session.messages, "the session has no system prompt"
     assert cm.chat_session.messages[0]["role"] == "system"
     tool_names = {t["function"]["name"] for t in cm.chat_session.tools}
@@ -104,7 +91,6 @@ def test_the_initial_prompt_carries_the_goal_and_the_plan_slot(config, coq):
     assert prompt.strip(), "the initial prompt is empty"
     assert "## PROOF FILE CONTEXT:" in prompt
     assert "## CURRENT PROOF PLAN: None" in prompt
-    # The trimmed file context has to reach the prompt, theorem included.
     assert "orb_true_l" in prompt, prompt[:500]
     assert "Require" in prompt
 

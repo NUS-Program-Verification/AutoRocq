@@ -97,7 +97,6 @@ def test_only_an_exact_repeat_counts_as_a_duplicate(manager):
     stats = manager.get_statistics()
     assert stats["total_entries"] == 4
     assert stats["unique_signatures"] == 4
-    # "other" was deduplicated away, so only "t" and "second" are represented.
     assert stats["theorems_covered"] == 2
     assert stats["unique_tactics"] == 2, stats["most_common_tactics"]
 
