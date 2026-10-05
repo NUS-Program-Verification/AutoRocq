@@ -8,11 +8,8 @@ from enum import Enum
 from pathlib import Path
 
 
-# FALLBACK ONLY. _structured_dependencies() is the dependency resolver: it
-# walks CoqPyt's parsed context and recognizes every form Rocq accepts. This
-# regex runs only when that context is unavailable, recognizes the common
-# declaration heads and nothing else, and is deliberately not a Rocq parser --
-# widen it to unblock a file, never to close the gap with the parsed context.
+# This intentionally limited pattern is used only when CoqPyt's parsed context
+# is unavailable; `_structured_dependencies` handles the full runtime path.
 DECLARATION_PATTERN = re.compile(
     r"^(?:#\[[^\]]*\]\s*)*"
     r"(?:(?:Local|Global|Polymorphic|Monomorphic)\s+)*"
@@ -212,9 +209,8 @@ def extract_essential_proof_content(
         if not theorem_found:
             return "## Essential proof context:\n(current theorem not found)\n"
 
-        # Step 3: Find all transitive dependencies using dependency graph. At
-        # runtime, prefer CoqPyt's parsed context: it distinguishes globals from
-        # binders and recognizes every declaration form supported by Rocq.
+        # Parsed context distinguishes globals from binders and supports every
+        # declaration form recognized by Rocq.
         structured_terms = None
         if proof is not None and file_context is not None and file_path is not None:
             structured_terms = _structured_dependencies(proof, file_context, file_path)

@@ -4,9 +4,7 @@ gets to see of a Why3-generated goal file.
 
 The fallback is pure text processing, while the runtime path uses CoqPyt's
 parsed context to distinguish global references from binders and declaration
-names. The old tests stood up a whole ContextManager and collected checks into
-a returned boolean that pytest ignored, so every check could fail while the
-test still passed.
+names.
 """
 
 import sys
@@ -49,22 +47,19 @@ def test_a_why3_goal_file_keeps_its_imports_theorem_and_used_definitions():
     content = GOAL_FILE.read_text(encoding="utf-8")
     extracted = extract(content)
 
-    # Imports: plain Require, From ... Require, and Open Scope all count.
     assert "Require Import BuiltIn." in extracted
     assert "From Stdlib Require Import ZArith Lia." in extracted
     assert "Open Scope Z_scope." in extracted
 
-    # The theorem itself, with its statement and the Proof. that follows.
     assert "Theorem wp_goal :" in extracted
     assert "is_sint32 i ->" in extracted
     assert "Proof." in extracted
 
-    # wp_goal mentions is_sint32, so its definition has to come along.
     assert "Definition is_sint32" in extracted
 
 
 def test_definitions_the_theorem_never_mentions_are_dropped():
-    """The whole point is the size cut, so check what got left behind."""
+    """Keep the prompt substantially smaller than the source file."""
     content = GOAL_FILE.read_text(encoding="utf-8")
     extracted = extract(content)
 
@@ -139,7 +134,6 @@ def test_find_transitive_dependencies_closes_over_the_graph():
     assert find_transitive_dependencies({"c"}, definitions) == {"c"}
     assert find_transitive_dependencies(set(), definitions) == set()
 
-    # A name with no definition is simply not resolvable, and must not raise.
     assert find_transitive_dependencies({"missing"}, definitions) == set()
 
 

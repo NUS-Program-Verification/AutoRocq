@@ -66,7 +66,6 @@ def test_the_opening_state_is_one_goal_with_no_hypotheses(coq):
     assert "is_sint32 i" in ty, ty
     assert "i1 * i1 <= 99" in ty, ty
 
-    # Nothing has been introduced, so there is no context to render either.
     assert coq.get_hypothesis() == ""
 
 
@@ -87,7 +86,6 @@ def test_intros_moves_every_binder_into_the_hypotheses(coq):
     assert len(names) == 8, names
     assert len(subgoals_after[0].hyps) > len(subgoals_before[0].hyps)
 
-    # What is left to prove is the conclusion alone.
     ty_after = str(subgoals_after[0].ty)
     assert "forall" not in ty_after, ty_after
     assert "i1 * i1 <= 99" in ty_after, ty_after
@@ -113,7 +111,6 @@ def test_get_hypothesis_renders_the_focused_context(coq):
         f"{len(lines)} lines rendered for {len(focused.hyps)} hypotheses"
     )
 
-    # Every name and every type the goal carries has to be in there, in order.
     for hyp, line in zip(focused.hyps, lines):
         for name in hyp.names:
             assert name in line, f"{name!r} missing from {line!r}"
