@@ -114,7 +114,7 @@ def test_completion_uses_the_structured_goal_state(coq, monkeypatch):
 
 
 def test_completion_survives_qed(coq):
-    """The defect this replaced: completion flipped False exactly when true."""
+    """Completion remains true after Qed closes the proof."""
     close_the_goals(coq)
     assert coq.is_proof_complete(), "no goals left but not reported complete"
 
@@ -143,7 +143,7 @@ def test_applying_qed_twice_keeps_one_terminator(coq):
 
 
 def test_the_flags_do_not_depend_on_the_order_they_are_computed(coq):
-    """What made the old code fragile: the dict's key order was load-bearing."""
+    """Completion flags are independent of their evaluation order."""
     close_the_goals(coq)
 
     # Deliberately the reverse of the order get_proof_completion_status() uses.
