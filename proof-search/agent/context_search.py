@@ -119,10 +119,7 @@ class ResultReducer:
         # Show top entries with their signatures
         for i, entry in enumerate(ranked_entries[:self.max_entries]):
             
-            # Count what we hand back, under the key _rank_entries reads.
-            # This used to hash the whole entry dict while the ranker looked the
-            # count up by md5 of the name, so the two never met and the decay
-            # below was dead: the same entries came back every search.
+            # Track returned entries by the normalized name used for ranking.
             seen = entry.get('name', '').lower()
             self.result_hit_count[seen] = self.result_hit_count.get(seen, 0) + 1
             
@@ -239,13 +236,11 @@ class ResultReducer:
             if len(name) < 10:
                 score += 1
             
-            # Prefer standard library entries. module is lowercased above, so
-            # these are too; against ['Z', 'Nat', ...] this could never match.
+            # Module names are normalized to lowercase above.
             if module in ['z', 'nat', 'list', 'bool', 'arith']:
                 score += 1
-            
-            # Push down what earlier summaries already handed back. `name` is
-            # lowercased above, which is the key _structured_summarization counts under.
+
+            # Apply per-session decay to names already included in a summary.
             hit_count = self.result_hit_count.get(name, 0)
             if hit_count > 0:
                 # exponential decay of frequently retrieved results
