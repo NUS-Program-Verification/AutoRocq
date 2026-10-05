@@ -286,16 +286,13 @@ class ProofTree:
         
         target_subgoal.children.append(new_node)
         
-        # Update open subgoals list based on what happened
         if focused_goal_completed:
-            # The selected subgoal was completed - remove it.
             self.open_subgoals.pop(target_index)
             self.logger.info(
                 f"Selected subgoal completed. "
                 f"{len(self.open_subgoals)} open subgoals remaining"
             )
         else:
-            # Replace the transformed selected subgoal with its new node.
             self.open_subgoals[target_index] = new_node
             self.logger.info("Selected subgoal transformed, updated open subgoals list")
         
