@@ -746,7 +746,7 @@ class ContextManager:
 
         goal_context = self.coq.get_goal_str() if self.coq else ""
         search_result = self.context_search.search(
-            query, goal_context=goal_context or ""
+            query, goal_context=goal_context
         )
         error = (search_result.metadata or {}).get('error')
         if error:
