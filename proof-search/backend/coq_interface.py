@@ -335,11 +335,7 @@ class CoqInterface:
     
     @staticmethod
     def format_hypotheses(goal) -> str:
-        """One line per hypothesis of a coqpyt Goal, the way Rocq prints them.
-
-        A let-bound hypothesis carries its body in Hyp.definition and reads
-        "y := true : bool"; the body is kept.
-        """
+        """Render each hypothesis with its names, type, and any let-bound value."""
         lines = []
         for hyp in getattr(goal, 'hyps', None) or []:
             names = ', '.join(getattr(hyp, 'names', None) or [])
@@ -353,11 +349,7 @@ class CoqInterface:
         return '\n'.join(lines)
 
     def get_raw_hypothesis(self):
-        """Return the context of the focused goal, one hypothesis per line.
-
-        The context lives on the goals, not on the proof's steps. Backgrounded
-        goals are left out; get_subgoals() is there for the rest.
-        """
+        """Return the first focused goal's hypotheses, one per line."""
         try:
             subgoals = self.get_subgoals()
             if not subgoals:
@@ -1423,8 +1415,8 @@ class CoqInterface:
             # Get CURRENT goals directly from proof_file (not from cached step.goals)
             current_goals = self._get_current_goals_cached()
 
-            # `is None` on purpose: a GoalAnswer with no goals left is still
-            # truthy, so `if not current_goals` would never fire here.
+            # None means no goal response is available. A GoalAnswer can be
+            # truthy even with no goals; inspect its goal lists below.
             if current_goals is None:
                 self.logger.debug("No current goals available")
                 return []

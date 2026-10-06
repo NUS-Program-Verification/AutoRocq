@@ -556,6 +556,8 @@ class ContextManager:
         return prompt
 
     def extract_essential_proof_content(self, proof_file_content):
+        # Parsed context resolves declaration dependencies and distinguishes
+        # global references from local binders.
         proof_file = getattr(self.coq, "proof_file", None)
         return extract_essential_proof_content(
             self.logger,
