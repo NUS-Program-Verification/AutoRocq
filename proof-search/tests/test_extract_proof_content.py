@@ -32,7 +32,7 @@ def extract(content):
 
 
 def extract_with_coqpyt(path):
-    with ProofFile(str(path), workspace=str(path.parent)) as proof_file:
+    with ProofFile(str(path), use_disk_cache=True) as proof_file:
         proof_file.run()
         proof = proof_file.unproven_proofs[0]
         return extract_essential_proof_content(
