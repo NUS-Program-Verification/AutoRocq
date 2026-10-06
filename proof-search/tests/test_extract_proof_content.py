@@ -18,6 +18,8 @@ from utils.coq_utils import (
     find_transitive_dependencies,
 )
 from coqpyt.coq.proof_file import ProofFile
+from agent.context_manager import ContextManager
+from backend.coq_interface import CoqInterface
 from utils.logger import setup_logger
 
 logger = setup_logger("test_extract_proof_content")
@@ -40,6 +42,43 @@ def extract_with_coqpyt(path):
             file_context=proof_file.context,
             file_path=proof_file.path,
         )
+
+
+def test_initial_prompt_resolves_parsed_dependencies_without_an_llm(tmp_path):
+    # Program declarations require parsed context; the binder shadows a global.
+    source = "\n".join(
+        [
+            "From Stdlib Require Import Program.",
+            "Program Definition hidden_value : nat := 7.",
+            "Definition used_value : nat := hidden_value.",
+            "Definition unused_value : nat := 42.",
+            "Theorem wp_goal : forall unused_value : nat, used_value = used_value.",
+            "Proof.",
+            "Admitted.",
+        ]
+    )
+    path = tmp_path / "prompt_context.v"
+    path.write_text(source, encoding="utf-8")
+    interface = CoqInterface(str(path), timeout=60)
+    try:
+        assert interface.load(), interface.get_last_error()
+
+        # Prompt construction needs the loaded proof, not a chat session.
+        manager = ContextManager.__new__(ContextManager)
+        manager.coq = interface
+        manager.logger = logger
+        manager.proof_plan = None
+        prompt = manager.build_initial_prompt("")
+
+        assert "Program Definition hidden_value : nat := 7." in prompt
+        assert "Definition used_value : nat := hidden_value." in prompt
+        assert "Definition unused_value" not in prompt
+        assert prompt.count("Theorem wp_goal") == 1
+        assert prompt.index("Program Definition hidden_value") < prompt.index(
+            "Definition used_value"
+        )
+    finally:
+        interface.close()
 
 
 def test_a_why3_goal_file_keeps_its_imports_theorem_and_used_definitions():
