@@ -31,7 +31,7 @@ class ResultReducer:
         self.max_medium_result = 1000     # Boundary-aware truncation for 500-1K
         self.max_large_result = 1000      # Heavy reduction for >1K
         self.max_entries = 10             # Max entries in summaries
-        self.result_hit_count = {}        # Count of results hit {hash: count}
+        self.result_hit_count = {}        # Retrieval counts by qualified identifier
 
         # Setup logger
         self.logger = setup_logger("ResultReducer")
@@ -119,8 +119,8 @@ class ResultReducer:
         # Show top entries with their signatures
         for i, entry in enumerate(ranked_entries[:self.max_entries]):
             
-            # Track returned entries by the normalized name used for ranking.
-            seen = entry.get('name', '').lower()
+            # Rocq identifiers are case-sensitive and include their module.
+            seen = entry.get('full_name', entry.get('name', ''))
             self.result_hit_count[seen] = self.result_hit_count.get(seen, 0) + 1
             
             name = entry.get('name', 'Unknown')
@@ -236,12 +236,12 @@ class ResultReducer:
             if len(name) < 10:
                 score += 1
             
-            # Module names are normalized to lowercase above.
             if module in ['z', 'nat', 'list', 'bool', 'arith']:
                 score += 1
 
-            # Apply per-session decay to names already included in a summary.
-            hit_count = self.result_hit_count.get(name, 0)
+            # Apply per-session decay only to the same qualified identifier.
+            seen = entry.get('full_name', entry.get('name', ''))
+            hit_count = self.result_hit_count.get(seen, 0)
             if hit_count > 0:
                 # exponential decay of frequently retrieved results
                 score -= 2 ** (hit_count - 1)
