@@ -3,6 +3,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -92,6 +94,32 @@ def test_a_fresh_reducer_has_no_memory():
     again = summarized(ResultReducer(), content)
 
     assert first == again, "ranking is not deterministic for a fresh reducer"
+
+
+@pytest.mark.parametrize(
+    "seen_name, unseen_name",
+    [
+        ("Z.add_comm", "Nat.add_comm"),
+        ("Z.add_comm", "z.add_comm"),
+        ("Z.add_comm", "Z.Add_comm"),
+    ],
+)
+def test_retrieval_decay_distinguishes_qualified_identifiers(seen_name, unseen_name):
+    entries = [entry(name, module) for module, name in (
+        seen_name.rsplit(".", 1), unseen_name.rsplit(".", 1)
+    )]
+    content = "\n".join(item["raw_line"] for item in entries)
+    reducer = ResultReducer()
+    reducer.max_entries = 1
+
+    reducer._structured_summarization(content, "commutativity")
+    assert reducer.result_hit_count == {seen_name: 1}
+
+    ranked = reducer._rank_entries(entries, "commutativity")
+    assert [item["full_name"] for item in ranked] == [unseen_name, seen_name]
+
+    reducer._structured_summarization(content, "commutativity")
+    assert reducer.result_hit_count == {seen_name: 1, unseen_name: 1}
 
 
 def test_ranking_keeps_every_entry():
