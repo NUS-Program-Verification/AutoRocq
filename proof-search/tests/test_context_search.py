@@ -156,13 +156,6 @@ class FakeCoq:
 
 
 class FakeSearch:
-    """A ContextSearch double: the layer ContextManager talks to.
-
-    It records the goal context it was handed: ContextManager is supposed to
-    read the live goal and pass it down for relevance ranking, and without it
-    _rank_entries short-circuits and ranking never runs at all.
-    """
-
     def __init__(self, result):
         self.result = result
         self.goal_contexts = []
@@ -404,13 +397,7 @@ def test_keyword_extraction():
 
 
 def test_goal_context_reranks_entries():
-    """_rank_entries is the actual ranking -- pin it directly.
-
-    Known defect, recorded rather than fixed: _structured_summarization records
-    hit counts under hash(frozenset(entry.items())) while _rank_entries reads
-    them back under md5(name), so the "exponential decay of frequently
-    retrieved results" branch can never fire.
-    """
+    """Goal keywords determine relevance ordering without dropping entries."""
     reducer = ResultReducer()
     names = lambda ranked: [entry["name"] for entry in ranked]
 

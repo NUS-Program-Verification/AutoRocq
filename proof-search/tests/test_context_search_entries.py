@@ -1,13 +1,4 @@
-"""
-Entry parsing and ranking on *live* Search output, plus the ContextSearch
-wrapper the agent actually calls.
-
-test_context_search.py deliberately drives ResultReducer with synthetic entries
-so the size bands stay deterministic; the gap that leaves is that nothing
-checks _parse_search_entries against text Rocq really emitted. That is what
-this file does, together with ContextSearch.search/execute_coq_query, which
-test_context_search.py never touches.
-"""
+"""Parsing, ranking, and query dispatch against live Rocq search results."""
 
 import sys
 from pathlib import Path
