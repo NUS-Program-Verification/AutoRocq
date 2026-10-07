@@ -1,3 +1,4 @@
+from tests.test_utils import create_coq_interface
 from agent.proof_controller import ProofController
 from agent.proof_tree import ProofTree
 from agent.context_manager import ContextManager
@@ -117,8 +118,7 @@ def load_live_proof(tmp_path, name, statement):
         f"Theorem {name} {statement}.\nProof.\nAdmitted.\n",
         encoding="utf-8",
     )
-    interface = CoqInterface(str(source))
-    assert interface.load(), interface.get_last_error()
+    interface = create_coq_interface(str(source))
     controller = make_live_controller(interface)
     assert_frontier_matches_coqpyt(controller, interface)
     return interface, controller
