@@ -666,6 +666,7 @@ class ProofController:
             self.proof_tree.root,
             self.proof_tree.open_subgoals,
             self.proof_tree.active_node,
+            self.proof_tree.live_goals,
         ))
         try:
             # Update proof tree
@@ -688,6 +689,7 @@ class ProofController:
                 self.proof_tree.root,
                 self.proof_tree.open_subgoals,
                 self.proof_tree.active_node,
+                self.proof_tree.live_goals,
             ) = tree_snapshot
             proof = getattr(self.coq, 'proof', None) if hasattr(self, 'coq') else None
             if proof is not None and proof.steps:
@@ -744,21 +746,15 @@ class ProofController:
                 if not 0 <= target_index < len(subgoals_before):
                     raise ValueError(f"Invalid goal selector index {target_index + 1}")
 
-                before_signatures = [
-                    self.proof_tree.format_goal(goal) for goal in subgoals_before
+                before_ids = self.proof_tree.goal_ids(subgoals_before)
+                after_ids = self.proof_tree.goal_ids(subgoals_after)
+                after_id_set = set(after_ids)
+                if before_ids != [node.goal_id for node in self.proof_tree.open_subgoals]:
+                    raise ValueError("Rocq and tree frontier IDs differ before the tactic")
+                unselected_ids = set(before_ids) - {before_ids[target_index]}
+                replacement_subgoals = [
+                    goal for goal in subgoals_after if goal.goal_id not in unselected_ids
                 ]
-                after_signatures = [
-                    self.proof_tree.format_goal(goal) for goal in subgoals_after
-                ]
-                prefix = before_signatures[:target_index]
-                suffix = before_signatures[target_index + 1:]
-                if after_signatures[:target_index] != prefix:
-                    raise ValueError("Tactic changed goals before its selected goal")
-                if suffix and after_signatures[-len(suffix):] != suffix:
-                    raise ValueError("Tactic changed goals after its selected goal")
-
-                replacement_end = len(subgoals_after) - len(suffix)
-                replacement_subgoals = subgoals_after[target_index:replacement_end]
                 if len(replacement_subgoals) > 1:
                     self.proof_tree.add_branching_node(
                         tactic=successful_tactic,
@@ -783,6 +779,16 @@ class ProofController:
                         target_index=target_index,
                         replacement_subgoals=replacement_subgoals,
                     )
+                # Shared evars can also solve goals outside the selected branch.
+                for index in reversed(range(len(self.proof_tree.open_subgoals))):
+                    node = self.proof_tree.open_subgoals[index]
+                    if node.goal_id in unselected_ids and node.goal_id not in after_id_set:
+                        self.proof_tree.attach_to_correct_subgoal(
+                            successful_tactic, goals_before, "", hypotheses_before, "",
+                            self.global_step_id, subgoals_before, subgoals_after,
+                            target_index=index, replacement_subgoals=[],
+                        )
+            self.proof_tree.reorder_open_subgoals(subgoals_after)
         
         except Exception as tree_error:
             import traceback
@@ -829,8 +835,18 @@ class ProofController:
         all_selector = re.match(r"^\s*all\s*:", tactic, re.IGNORECASE)
         proof = getattr(self.coq, 'proof', None)
         step_count = len(proof.steps) if proof is not None else 0
+        before_ids = set(self.proof_tree.goal_ids(self.coq.get_subgoals()))
         success = self.coq.apply_tactic(tactic)
-        if not success or not all_selector:
+        if not success:
+            return False
+        answer = self.coq._get_current_goals_cached()
+        config = answer.goals if answer is not None else None
+        hidden = (config.shelf + config.given_up) if config is not None else []
+        if before_ids.intersection(self.proof_tree.goal_ids(hidden)):
+            self._restore_coq_step_count(step_count)
+            self.coq.last_error = "Tactic was reverted because a tracked goal was shelved or given up"
+            return False
+        if not all_selector:
             return success
 
         if not self.coq.get_subgoals():
@@ -961,6 +977,7 @@ class ProofController:
                 # Step 4b: Refresh CoqInterface's cached proof object
                 # Get a fresh proof object that reflects the current file state
                 self.coq.proof = self.coq.get_unproven_proof()
+                self.coq._invalidate_goal_caches()
                 if self.coq.proof:
                     self.logger.debug(f"🔄 Refreshed proof object: now has {len(self.coq.proof.steps)} steps")
                 else:
