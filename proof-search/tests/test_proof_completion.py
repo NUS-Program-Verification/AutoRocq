@@ -1,11 +1,3 @@
-"""
-Completion is reported, not caused.
-
-The contract these pin: asking for status changes nothing and can be repeated,
-apply_qed() is the only thing that closes a proof, a refused Qed leaves the
-proof untouched and says why, and completion stays true once a proof is closed.
-"""
-
 import sys
 from pathlib import Path
 
@@ -14,10 +6,8 @@ import pytest
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from backend.coq_interface import CoqInterface
-from tests.test_utils import temp_example_copy
+from tests.test_utils import temp_example_copy, create_coq_interface
 
-# Closes `forall b : bool, orb true b = true`; both branches need their own pair.
 PROOF_TACTICS = [
     " intros b.",
     " destruct b.",
@@ -35,42 +25,21 @@ Admitted.
 """
 
 
-def _loaded(path):
-    interface = CoqInterface(str(path))
-    assert interface.load(), f"load() failed: {interface.get_last_error()}"
-    return interface
-
-
-@pytest.fixture
-def coq():
-    """A loaded interface on a throwaway copy of example.v (one open proof)."""
-    interface = _loaded(temp_example_copy("example.v"))
-    try:
-        yield interface
-    finally:
-        interface.close()
-
-
 @pytest.fixture
 def two_proofs():
-    """The same file with a second, untouched lemma after the first."""
     path = temp_example_copy("example.v")
     path.write_text(path.read_text() + SECOND_LEMMA)
-    interface = _loaded(path)
-    try:
-        yield interface
-    finally:
-        interface.close()
+    interface = create_coq_interface(path)
+    yield interface
+    interface.close()
 
 
 def close_the_goals(coq):
-    """Apply the six tactics. Leaves the proof goal-free but not terminated."""
     for tactic in PROOF_TACTICS:
         assert coq.apply_tactic(tactic), f"{tactic.strip()!r}: {coq.get_last_error()}"
 
 
 def test_asking_for_status_leaves_the_proof_alone(coq):
-    """Reading status must not append Qed, and must be repeatable."""
     opening = coq.get_proof_completion_status()
     assert opening["has_proof"] and not opening["ready_for_qed"], opening
     assert opening == coq.get_proof_completion_status(), "status is not idempotent"
@@ -89,7 +58,6 @@ def test_asking_for_status_leaves_the_proof_alone(coq):
 
 
 def test_is_ready_for_qed_predicts_without_acting(coq):
-    """It reports whether Qed is worth trying. apply_qed() does the trying."""
     close_the_goals(coq)
     steps_before = len(coq.proof.steps)
 
@@ -105,7 +73,6 @@ def test_is_ready_for_qed_predicts_without_acting(coq):
 
 
 def test_completion_uses_the_structured_goal_state(coq, monkeypatch):
-    """Rendered goal text must not override CoqPyt's structured goals."""
     monkeypatch.setattr(coq, "get_goal_str", lambda: "No more goals.")
 
     assert coq.has_open_goals()
@@ -114,14 +81,12 @@ def test_completion_uses_the_structured_goal_state(coq, monkeypatch):
 
 
 def test_completion_survives_qed(coq):
-    """Completion remains true after Qed closes the proof."""
     close_the_goals(coq)
     assert coq.is_proof_complete(), "no goals left but not reported complete"
 
     assert coq.apply_qed(), f"Qed refused: {coq.get_last_error()}"
 
-    # coqpyt drops a closed proof out of unproven_proofs, so completion cannot
-    # be resolved through it -- this is the moment that distinction shows.
+    # CoqPyt removes closed proofs from unproven_proofs.
     assert coq.proof_file.unproven_proofs == []
     assert coq.get_unproven_proof() is None
     assert coq.is_proof_complete(), "completion did not survive Qed"
@@ -143,10 +108,8 @@ def test_applying_qed_twice_keeps_one_terminator(coq):
 
 
 def test_the_flags_do_not_depend_on_the_order_they_are_computed(coq):
-    """Completion flags are independent of their evaluation order."""
     close_the_goals(coq)
 
-    # Deliberately the reverse of the order get_proof_completion_status() uses.
     terminated = coq._last_step_is_terminator(coq.proof)
     ready = coq.is_ready_for_qed()
     complete = coq.is_proof_complete()
@@ -168,12 +131,6 @@ def test_the_flags_do_not_depend_on_the_order_they_are_computed(coq):
 
 
 def test_a_refused_qed_leaves_the_proof_alone_and_says_why(coq, monkeypatch):
-    """Rocq can reject Qed on a goal-free proof: evars, a guard condition.
-
-    is_ready_for_qed() only predicts, so apply_qed() is where that is found out.
-    It has to leave the proof exactly as it was, report False, and record the
-    reason rather than swallowing it.
-    """
     close_the_goals(coq)
     assert coq.is_ready_for_qed(), "the goals are gone, Qed is worth trying"
 
@@ -197,7 +154,6 @@ def test_a_refused_qed_leaves_the_proof_alone_and_says_why(coq, monkeypatch):
 
 
 def test_the_agents_completion_check_fires_only_once_the_proof_is_closed(coq):
-    """The exact conjunction proof_controller reads, at all three moments."""
     def agent_sees_success():
         status = coq.get_proof_completion_status()
         return status["is_complete"] and status["qed_already_applied"]
@@ -212,7 +168,6 @@ def test_the_agents_completion_check_fires_only_once_the_proof_is_closed(coq):
 
 
 def test_get_proof_status_reports_a_proved_file_as_complete(coq):
-    """main.py picks its cleanup branch off this flag."""
     close_the_goals(coq)
     assert coq.apply_qed(), f"Qed refused: {coq.get_last_error()}"
 
@@ -220,11 +175,6 @@ def test_get_proof_status_reports_a_proved_file_as_complete(coq):
 
 
 def test_closing_one_proof_in_a_file_that_has_two(two_proofs):
-    """Completion is about the proof being driven, not the file's first open one.
-
-    With a second lemma still admitted, unproven_proofs is never empty, so a
-    lookup-based answer reports on the wrong proof.
-    """
     coq = two_proofs
     target = coq.proof
     assert target is not None
