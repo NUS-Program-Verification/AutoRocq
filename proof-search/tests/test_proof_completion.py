@@ -14,8 +14,7 @@ import pytest
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from backend.coq_interface import CoqInterface
-from tests.test_utils import temp_example_copy
+from tests.test_utils import temp_example_copy, create_coq_interface
 
 # Closes `forall b : bool, orb true b = true`; both branches need their own pair.
 PROOF_TACTICS = [
@@ -35,32 +34,14 @@ Admitted.
 """
 
 
-def _loaded(path):
-    interface = CoqInterface(str(path))
-    assert interface.load(), f"load() failed: {interface.get_last_error()}"
-    return interface
-
-
-@pytest.fixture
-def coq():
-    """A loaded interface on a throwaway copy of example.v (one open proof)."""
-    interface = _loaded(temp_example_copy("example.v"))
-    try:
-        yield interface
-    finally:
-        interface.close()
-
-
 @pytest.fixture
 def two_proofs():
     """The same file with a second, untouched lemma after the first."""
     path = temp_example_copy("example.v")
     path.write_text(path.read_text() + SECOND_LEMMA)
-    interface = _loaded(path)
-    try:
-        yield interface
-    finally:
-        interface.close()
+    interface = create_coq_interface(path)
+    yield interface
+    interface.close()
 
 
 def close_the_goals(coq):
