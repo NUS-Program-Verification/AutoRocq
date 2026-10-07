@@ -1,4 +1,7 @@
-"""Live goal and local-context extraction."""
+"""
+get_subgoals(): the structured view of the proof state that ProofController
+diffs to decide how the proof tree branches.
+"""
 
 import sys
 from pathlib import Path
@@ -75,7 +78,12 @@ def test_intros_moves_every_binder_into_the_hypotheses(coq):
 
 
 def test_get_hypothesis_renders_the_focused_context(introduced_coq):
-    """Render local hypotheses, not the global terms referenced by proof steps."""
+    """The context comes off the goals; the proof's steps never carried it.
+
+    Hypotheses live on `goals.goals[i].hyps`, which is what get_subgoals()
+    reads. A ProofStep has no `hypotheses`, and its `context` is a List[Term]
+    -- the definitions a step referenced, not the proof's hypotheses.
+    """
     coq = introduced_coq
     focused = coq.get_subgoals()[0]
     assert focused.hyps, "the context is gone; this test is moot"
