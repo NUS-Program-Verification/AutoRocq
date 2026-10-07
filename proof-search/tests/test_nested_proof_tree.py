@@ -3,6 +3,7 @@ from agent.proof_tree import ProofTree
 from agent.context_manager import ContextManager
 from backend.coq_interface import CoqInterface
 from coqpyt.lsp.structs import Goal, Hyp
+import pytest
 
 
 def make_controller(initial_goal):
@@ -20,7 +21,7 @@ def make_controller(initial_goal):
         hypotheses_before="",
         hypotheses_after="",
         step_number=0,
-        subgoals_after=[initial_goal],
+        subgoals_after=[Goal([], initial_goal, 0)],
     )
     return controller
 
@@ -30,6 +31,16 @@ def update(controller, before, after, tactic):
         return str(goal.ty) if hasattr(goal, "ty") else str(goal)
 
     controller.global_step_id += 1
+    ids = [node.goal_id for node in controller.proof_tree.open_subgoals]
+    replacement_count = len(after) - len(before) + 1
+    after_ids = [controller.global_step_id * 100 + i for i in range(replacement_count)] + ids[1:]
+    def identified(goal, goal_id):
+        if isinstance(goal, str):
+            return Goal([], goal, goal_id)
+        goal.goal_id = goal_id
+        return goal
+    before = [identified(goal, goal_id) for goal, goal_id in zip(before, ids)]
+    after = [identified(goal, goal_id) for goal, goal_id in zip(after, after_ids)]
     controller._update_proof_tree(
         before,
         after,
@@ -42,7 +53,7 @@ def update(controller, before, after, tactic):
 
 
 def open_goals(controller):
-    return [node.goals_after for node in controller.proof_tree.open_subgoals]
+    return [controller.proof_tree.current_goal(node)[0] for node in controller.proof_tree.open_subgoals]
 
 
 def hypothesis_text(goal):
@@ -55,10 +66,13 @@ def assert_frontier_matches_coqpyt(controller, interface):
         for goal in interface.get_subgoals()
     ]
     actual = [
-        (node.goals_after.strip(), node.hypotheses_after.strip())
+        controller.proof_tree.current_goal(node)
         for node in controller.proof_tree.open_subgoals
     ]
     assert actual == expected
+    assert [node.goal_id for node in controller.proof_tree.open_subgoals] == [
+        goal.goal_id for goal in interface.get_subgoals()
+    ]
 
 
 def make_live_controller(interface):
@@ -669,7 +683,7 @@ def test_abort_is_rejected_without_destroying_the_proof_state(tmp_path):
         interface.close()
 
 
-def test_inconsistent_selected_goal_transition_is_not_silently_accepted():
+def test_inconsistent_frontier_ids_are_not_silently_accepted():
     controller = make_controller("A")
     controller.proof_tree.open_subgoals.append(
         controller.proof_tree.add_node(
@@ -682,11 +696,12 @@ def test_inconsistent_selected_goal_transition_is_not_silently_accepted():
             parent=controller.proof_tree.root,
         )
     )
+    controller.proof_tree.open_subgoals[1].goal_id = 1
 
     result = controller._handle_successful_tactic(
         "2: exact HB.",
-        ["A", "B"],
-        ["X"],
+        [Goal([], "A", 0), Goal([], "B", 99)],
+        [Goal([], "A", 0)],
         "A",
         "X",
         "",
@@ -752,5 +767,125 @@ def test_shelving_is_rejected_until_the_tree_can_represent_shelves(tmp_path):
         assert not controller._apply_tactic("shelve.")
         assert controller.proof_tree.to_dict() == tree_before
         assert [str(goal.ty) for goal in interface.get_subgoals()] == goals_before
+    finally:
+        interface.close()
+
+
+@pytest.mark.parametrize("nested, focused", [(False, False), (True, False), (True, True)])
+def test_shared_witness_refreshes_all_branches_and_survives_rollback(tmp_path, nested, focused):
+    statement = (
+        ": exists n : nat, (n = 2 /\\ n = 2 + 0) /\\ n + 0 = 2"
+        if nested else ": exists n : nat, n = 2 /\\ n + 0 = 2"
+    )
+    interface, controller = load_live_proof(tmp_path, "shared_witness", statement)
+    try:
+        tactics = ["eexists.", "split."]
+        if focused:
+            tactics.append("{")
+        if nested:
+            tactics.append("split.")
+        states = [apply_live(controller, tactic) for tactic in tactics]
+        nodes_before = list(controller.proof_tree.open_subgoals)
+        snapshots = [(node.goals_after, node.hypotheses_after) for node in nodes_before]
+        ids_before = [node.goal_id for node in nodes_before]
+
+        states.append(apply_live(controller, "reflexivity."))
+        assert [node.goal_id for node in controller.proof_tree.open_subgoals] == ids_before[1:]
+        assert controller.proof_tree.open_subgoals == nodes_before[1:]
+        assert open_goals(controller) == (["2 = 2 + 0", "2 + 0 = 2"] if nested else ["2 + 0 = 2"])
+        assert [(node.goals_after, node.hypotheses_after) for node in nodes_before] == snapshots
+        assert "?n" not in controller.proof_tree.get_proof_tree_string()
+
+        result = controller._execute_rollback(states, "", "", 1)
+        assert result["success"], result
+        assert_frontier_matches_coqpyt(controller, interface)
+        assert all("?n" in goal for goal in open_goals(controller))
+        apply_live(controller, "reflexivity.")
+        if nested:
+            apply_live(controller, "reflexivity.")
+        if focused:
+            apply_live(controller, "}")
+        apply_live(controller, "reflexivity.")
+        assert not controller.proof_tree.open_subgoals
+    finally:
+        interface.close()
+
+
+def test_shared_witness_refreshes_hypothesis_types_and_definition_bodies(tmp_path):
+    interface, controller = load_live_proof(
+        tmp_path, "shared_context", ": exists n : nat, n = 2 /\\ n + 0 = 2",
+    )
+    try:
+        apply_live(controller, "eexists.")
+        apply_live(controller, "match goal with |- ?w = _ /\\ _ => pose (saved := w); pose proof (eq_refl w) as H; pose (packed := eq_refl w) end.")
+        apply_live(controller, "split.")
+        sibling = controller.proof_tree.open_subgoals[1]
+        context_snapshot = sibling.hypotheses_after
+        assert "?n" in context_snapshot
+        apply_live(controller, "reflexivity.")
+        assert controller.proof_tree.open_subgoals == [sibling]
+        context = controller.proof_tree.current_goal(sibling)[1]
+        assert "?n" not in context
+        assert "saved := 2 : nat" in context
+        assert "H : 2 = 2" in context
+        assert "packed :=" in context and ": 2 = 2" in context
+        assert sibling.hypotheses_after == context_snapshot
+        assert context in controller.proof_tree.get_proof_tree_string()
+        apply_live(controller, "reflexivity.")
+    finally:
+        interface.close()
+
+
+def test_identical_goal_text_is_reordered_by_id(tmp_path):
+    interface, controller = load_live_proof(tmp_path, "identical_goals", ": True /\\ True")
+    try:
+        apply_live(controller, "split.")
+        first, second = controller.proof_tree.open_subgoals
+        assert first.goal_id != second.goal_id
+        assert first.goals_after == second.goals_after == "True"
+        apply_live(controller, "Focus 2.")
+        assert controller.proof_tree.open_subgoals == [second, first]
+        apply_live(controller, "exact I.")
+        assert controller.proof_tree.open_subgoals == [first]
+    finally:
+        interface.close()
+
+
+def test_goal_parser_preserves_server_identity_and_requires_it_for_tracking():
+    goal = Goal.parse({"info": {"evar": ["Ser_Evar", 14]}, "hyps": [], "ty": "True"})
+    assert goal.goal_id == ("Ser_Evar", 14)
+    assert ProofTree.goal_ids([goal]) == [("Ser_Evar", 14)]
+    with pytest.raises(ValueError, match="required"):
+        ProofTree.goal_ids([Goal.parse({"hyps": [], "ty": "True"})])
+    with pytest.raises(ValueError, match="Duplicate"):
+        ProofTree.goal_ids([goal, goal])
+
+
+def test_indirectly_solved_goal_keeps_history_and_reopens_on_rollback():
+    controller = make_controller("A /\\ B")
+    update(controller, ["A /\\ B"], ["A", "B"], "split.")
+    first, second = controller.proof_tree.open_subgoals
+    controller.global_step_id += 1
+    controller._update_proof_tree(
+        [Goal([], "A", first.goal_id), Goal([], "B", second.goal_id)],
+        [], "solve_shared_evar.", "A", "", "", "",
+    )
+    assert not controller.proof_tree.open_subgoals
+    assert first.children[0].status == second.children[0].status == "Proved"
+    assert first.goals_after == "A" and second.goals_after == "B"
+    controller.proof_tree.delete_subtree_by_step_number(1)
+    assert controller.proof_tree.open_subgoals == [first, second]
+
+
+def test_goal_hidden_by_a_tactical_is_not_mistaken_for_a_solved_goal(tmp_path):
+    interface, controller = load_live_proof(tmp_path, "hidden_tactical", ": True")
+    try:
+        before = controller.proof_tree.to_dict()
+        steps = len(interface.proof.steps)
+        assert not controller._apply_tactic("try shelve.")
+        assert "shelved" in interface.get_last_error()
+        assert len(interface.proof.steps) == steps
+        assert controller.proof_tree.to_dict() == before
+        assert_frontier_matches_coqpyt(controller, interface)
     finally:
         interface.close()
