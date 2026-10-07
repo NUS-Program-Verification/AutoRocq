@@ -18,7 +18,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 try:
     from backend.coq_interface import CoqInterface
     from agent.context_search import ContextSearch
-    from tests.test_utils import temp_example_copy
+    from tests.test_utils import temp_example_copy, create_coq_interface
     print("✅ CoqInterface and ContextSearch available")
 except ImportError as e:
     print(f"❌ Import failed: {e}")
@@ -40,8 +40,7 @@ def test_search_commands():
     
     try:
         # Initialize CoqInterface and ContextSearch
-        coq = CoqInterface(str(proof_file_path))
-        assert coq.load(), coq.get_last_error()
+        coq = create_coq_interface(str(proof_file_path))
         print("✅ CoqInterface loaded successfully")
         
         # Initialize ContextSearch with ranking capabilities

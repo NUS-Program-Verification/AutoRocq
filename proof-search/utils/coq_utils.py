@@ -8,8 +8,7 @@ from enum import Enum
 from pathlib import Path
 
 
-# This intentionally limited pattern is used only when CoqPyt's parsed context
-# is unavailable; `_structured_dependencies` handles the full runtime path.
+# Limited declaration recognition for text-only dependency extraction.
 DECLARATION_PATTERN = re.compile(
     r"^(?:#\[[^\]]*\]\s*)*"
     r"(?:(?:Local|Global|Polymorphic|Monomorphic)\s+)*"
@@ -40,9 +39,7 @@ def _referenced_terms(file_context, step):
             if term is not None and term not in referenced:
                 referenced.append(term)
         elif file_context.is_notation(element):
-            # The notation node's children still contain references used in its
-            # arguments. Resolving the notation itself may require a Locate
-            # query, which ProofTerm.context has already done for the theorem.
+            # Notation arguments can contain global references.
             stack.append(element[1:])
         elif isinstance(element, list):
             stack.extend(
@@ -69,8 +66,7 @@ def _structured_dependencies(proof, file_context, file_path):
         if step is None or not _same_file(getattr(term, "file_path", None), file_path):
             continue
 
-        # Inductive types and their constructors are separate context names
-        # backed by the same Rocq sentence, so key by the shared Step object.
+        # An inductive type and its constructors share one declaration Step.
         step_key = id(step)
         if step_key in needed or step is getattr(proof, "step", None):
             continue
@@ -93,13 +89,7 @@ def extract_essential_proof_content(
     file_context=None,
     file_path=None,
 ):
-    """Extract essential content from proof file: imports and definitions for terms used in the theorem.
-
-    Resolves dependencies from CoqPyt's parsed context when `proof`,
-    `file_context` and `file_path` are all supplied. Without them it degrades
-    to scanning the source with DECLARATION_PATTERN, which sees less; the
-    caller is warned when that happens.
-    """
+    """Extract imports and theorem dependencies, preferring parsed Rocq context."""
     try:
         lines = proof_file_content.split('\n')
         essential_content = []
@@ -224,8 +214,6 @@ def extract_essential_proof_content(
                 )
                 if value is None
             ]
-            # The caller passes all three as getattr(..., None), so without
-            # this a half-loaded CoqInterface degrades without a trace.
             logger.warning(
                 "Rocq-parsed context unavailable (%s missing): falling back to "
                 "regex scanning, which recognizes only common declaration heads. "

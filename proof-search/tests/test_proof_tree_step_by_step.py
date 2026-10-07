@@ -19,6 +19,7 @@ from agent.proof_tree import ProofTree
 from agent.proof_controller import ProofController
 from utils.config import ProofAgentConfig
 from tests.test_utils import (
+    create_coq_interface,
     configure_test_library,
     reset_coq_file_to_admitted,
     temp_example_copy,
@@ -56,16 +57,9 @@ def test_proof_tree_evolution():
     print(f"✅ Loaded configuration from {config_file}")
     
     # Create CoqInterface
-    coq_interface = CoqInterface(
-        file_path=str(coq_file),
-        workspace=config.coq.workspace or str(coq_file.parent),
-        library_paths=config.coq.library_paths,
-        auto_setup_coqproject=config.coq.auto_setup_coqproject,
-        timeout=config.coq.timeout
-    )
+    coq_interface = create_coq_interface(coq_file, config=config)
     
     try:
-        assert coq_interface.load(), coq_interface.get_last_error()
         print("✅ CoqInterface loaded")
         
         # Create ContextManager

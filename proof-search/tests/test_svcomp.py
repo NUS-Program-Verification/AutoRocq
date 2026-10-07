@@ -10,6 +10,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from backend.coq_interface import CoqInterface
 from utils.config import ProofAgentConfig
 from tests.test_utils import (
+    create_coq_interface,
     configure_test_library,
     reset_coq_file_to_admitted,
     restore_coq_file_from_backup,
@@ -96,20 +97,10 @@ def test_proof_with_correct_tactics():
         print(f"📚 Library paths configured: {len(config.coq.library_paths)}")
         
         # Initialize CoqInterface using configuration (agent will auto-create _CoqProject)
-        coq_interface = CoqInterface(
-            file_path=str(coq_file),
-            workspace=config.coq.workspace or str(coq_file.parent),
-            library_paths=config.coq.library_paths,
-            auto_setup_coqproject=config.coq.auto_setup_coqproject,
-            coqproject_extra_options=config.coq.coqproject_extra_options,
-            timeout=config.coq.timeout
-        )
+        coq_interface = create_coq_interface(coq_file, config=config)
         
         try:
             print("✅ Created CoqInterface with auto-configured libraries")
-            
-            # Load the cleaned file using agent API
-            assert coq_interface.load(), coq_interface.get_last_error()
             
             print("✅ Cleaned file loaded successfully")
             

@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 import main as main_module
-from backend.coq_interface import CoqInterface
+from tests.test_utils import create_coq_interface
 from utils.logger import setup_logger
 from utils.scratch import ScratchProof
 
@@ -29,7 +29,7 @@ def test_close_preserves_source_and_removes_scratch_artifacts(tmp_path):
     original = b"Theorem proof : True. Proof. exact I. Qed.\n"
     source.write_bytes(original)
 
-    coq = CoqInterface(str(source))
+    coq = create_coq_interface(str(source), load=False)
     scratch = Path(coq.file_path)
     scratch.write_text("changed")
 
@@ -61,7 +61,7 @@ def test_source_path_and_scratch_use_the_resolved_source(tmp_path):
     link = link_dir / "alias.v"
     link.symlink_to(source)
 
-    coq = CoqInterface(str(link))
+    coq = create_coq_interface(str(link), load=False)
     try:
         assert Path(coq.source_path) == source.resolve()
         assert Path(coq.file_path).parent == source.parent.resolve()
@@ -82,7 +82,7 @@ def test_interface_cleaning_does_not_create_a_backup(tmp_path):
     source = tmp_path / "proof.v"
     source.write_text("Theorem proof : True. Proof. exact I. Qed.\n")
 
-    coq = CoqInterface(str(source))
+    coq = create_coq_interface(str(source), load=False)
     scratch = Path(coq.file_path)
     try:
         assert coq.clear_all_proof_scripts()

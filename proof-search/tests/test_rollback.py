@@ -12,8 +12,7 @@ import pytest
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from backend.coq_interface import CoqInterface
-from tests.test_utils import configure_test_library, temp_example_copy
+from tests.test_utils import configure_test_library, temp_example_copy, create_coq_interface
 from utils.config import ProofAgentConfig
 
 config_file = PROJECT_ROOT / "configs" / "default_config.json"
@@ -42,15 +41,7 @@ def replayed():
     config = configure_test_library(ProofAgentConfig.from_file(str(config_file)))
 
     coq_file = temp_example_copy("main_loop_invariant_2_established_Coq.v")
-    coq = CoqInterface(
-        file_path=str(coq_file),
-        workspace=config.coq.workspace or str(coq_file.parent),
-        library_paths=config.coq.library_paths,
-        auto_setup_coqproject=config.coq.auto_setup_coqproject,
-        coqproject_extra_options=config.coq.coqproject_extra_options,
-        timeout=config.coq.timeout,
-    )
-    assert coq.load(), f"load() failed: {coq.get_last_error()}"
+    coq = create_coq_interface(coq_file, config=config)
 
     try:
         # step number -> the goal string that step leaves behind

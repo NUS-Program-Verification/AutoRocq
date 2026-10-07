@@ -1415,8 +1415,7 @@ class CoqInterface:
             # Get CURRENT goals directly from proof_file (not from cached step.goals)
             current_goals = self._get_current_goals_cached()
 
-            # None means no goal response is available. A GoalAnswer can be
-            # truthy even with no goals; inspect its goal lists below.
+            # Handle a missing response (None).
             if current_goals is None:
                 self.logger.debug("No current goals available")
                 return []

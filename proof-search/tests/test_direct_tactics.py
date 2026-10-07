@@ -12,9 +12,8 @@ import pytest
 # Add the parent directory to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from backend.coq_interface import CoqInterface
 from utils.logger import setup_logger
-from tests.test_utils import temp_example_copy
+from tests.test_utils import temp_example_copy, create_coq_interface
 
 def test_three_tactics():
     """Test if simpl., simpl., reflexivity. can prove the goal."""
@@ -27,8 +26,7 @@ def test_three_tactics():
     
     try:
         # Load the Coq file
-        coq = CoqInterface(file_path)
-        assert coq.load(), coq.get_last_error()
+        coq = create_coq_interface(file_path)
         
         # Clear existing tactics
         assert coq.clear_unproven_proof_steps(), coq.get_last_error()

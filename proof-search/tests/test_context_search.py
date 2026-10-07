@@ -14,7 +14,7 @@ from agent.context_manager import ContextManager
 from agent.context_search import ContextSearch, ResultReducer, SearchResult
 from agent.proof_controller import ProofController
 from backend.coq_interface import CoqInterface
-from tests.test_utils import configure_test_library, temp_example_copy
+from tests.test_utils import configure_test_library, temp_example_copy, create_coq_interface
 from utils.config import ProofAgentConfig
 from utils.logger import setup_logger
 
@@ -108,19 +108,7 @@ def get_interface():
     global _interface
     if _interface is None:
         config = load_config()
-        coq = CoqInterface(
-            file_path=str(coq_file),
-            workspace=config.coq.workspace or str(coq_file.parent),
-            library_paths=config.coq.library_paths,
-            auto_setup_coqproject=config.coq.auto_setup_coqproject,
-            coqproject_extra_options=config.coq.coqproject_extra_options,
-            timeout=config.coq.timeout,
-        )
-        try:
-            assert coq.load(), f"CoqInterface.load() failed: {coq.get_last_error()}"
-        except BaseException:
-            coq.close()
-            raise
+        coq = create_coq_interface(coq_file, config=config)
         print("✅ CoqInterface loaded")
         _interface = coq
     return _interface

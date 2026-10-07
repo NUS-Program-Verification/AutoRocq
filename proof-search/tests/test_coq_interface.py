@@ -3,14 +3,10 @@
 import sys
 from pathlib import Path
 
-import pytest
-
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from backend.coq_interface import CoqInterface
 from coqpyt.coq.structs import TermType
-from tests.test_utils import temp_example_copy
 
 # example.v's goal reduces on `orb`'s first argument, so `reflexivity.` alone
 # would close it; going through both destruct branches exercises more of
@@ -23,21 +19,6 @@ PROOF = [
     " simpl.",
     " reflexivity.",
 ]
-
-
-@pytest.fixture
-def coq():
-    """A loaded interface on a throwaway copy of example.v.
-
-    Function-scoped on purpose: applying tactics mutates the proof and coqpyt
-    writes each accepted step back to the file, so tests must not share one.
-    """
-    interface = CoqInterface(str(temp_example_copy("example.v")))
-    assert interface.load(), f"load() failed: {interface.get_last_error()}"
-    try:
-        yield interface
-    finally:
-        interface.close()
 
 
 def test_load_opens_the_admitted_proof(coq):

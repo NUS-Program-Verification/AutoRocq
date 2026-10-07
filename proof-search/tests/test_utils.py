@@ -11,6 +11,44 @@ import pytest
 PROJECT_ROOT = Path(__file__).parent.parent
 
 
+def create_coq_interface(file_path, *, config=None, load=True, **options):
+    """Preserve caller-supplied paths and options when opening a test session."""
+    from backend.coq_interface import CoqInterface
+
+    if config is not None:
+        defaults = {
+            "workspace": config.coq.workspace or str(Path(file_path).parent),
+            "library_paths": config.coq.library_paths,
+            "auto_setup_coqproject": config.coq.auto_setup_coqproject,
+            "coqproject_extra_options": config.coq.coqproject_extra_options,
+            "timeout": config.coq.timeout,
+        }
+        defaults.update(options)
+        options = defaults
+    interface = CoqInterface(str(file_path), **options)
+    if load:
+        try:
+            assert interface.load(), interface.get_last_error()
+        except BaseException:
+            interface.close()
+            raise
+    return interface
+
+
+def create_proof_file(file_path, **options):
+    """Load a raw CoqPyt session with library disk caching enabled by default."""
+    from coqpyt.coq.proof_file import ProofFile
+
+    options.setdefault("use_disk_cache", True)
+    proof_file = ProofFile(str(file_path), **options)
+    try:
+        proof_file.run()
+    except BaseException:
+        proof_file.close()
+        raise
+    return proof_file
+
+
 def configure_test_library(config):
     """Use the compiled libautorocq checkout for live tests."""
     configured_path = os.getenv("AUTOROCQ_LIBRARY_PATH")

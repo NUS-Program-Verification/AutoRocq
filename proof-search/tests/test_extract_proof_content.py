@@ -13,13 +13,12 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from tests.test_utils import create_coq_interface, create_proof_file
 from utils.coq_utils import (
     extract_essential_proof_content,
     find_transitive_dependencies,
 )
-from coqpyt.coq.proof_file import ProofFile
 from agent.context_manager import ContextManager
-from backend.coq_interface import CoqInterface
 from utils.logger import setup_logger
 
 logger = setup_logger("test_extract_proof_content")
@@ -32,8 +31,7 @@ def extract(content):
 
 
 def extract_with_coqpyt(path):
-    with ProofFile(str(path), use_disk_cache=True) as proof_file:
-        proof_file.run()
+    with create_proof_file(str(path), use_disk_cache=True) as proof_file:
         proof = proof_file.unproven_proofs[0]
         return extract_essential_proof_content(
             logger,
@@ -59,9 +57,8 @@ def test_initial_prompt_resolves_parsed_dependencies_without_an_llm(tmp_path):
     )
     path = tmp_path / "prompt_context.v"
     path.write_text(source, encoding="utf-8")
-    interface = CoqInterface(str(path), timeout=60)
+    interface = create_coq_interface(str(path), timeout=60)
     try:
-        assert interface.load(), interface.get_last_error()
 
         # Prompt construction needs the loaded proof, not a chat session.
         manager = ContextManager.__new__(ContextManager)
