@@ -19,7 +19,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from agent.history_recorder import TacticHistoryEntry, TacticHistoryManager
 from backend.coq_interface import CoqInterface
-from tests.test_utils import temp_example_copy
+from tests.test_utils import temp_example_copy, create_coq_interface
 
 
 @pytest.fixture
@@ -176,8 +176,7 @@ def test_entry_dict_round_trip():
 
 def test_a_tactic_applied_through_coq_is_recorded_with_its_real_states(tmp_path):
     """End to end: the states stored are the ones Rocq actually produced."""
-    coq = CoqInterface(str(temp_example_copy("example.v")))
-    assert coq.load(), f"load() failed: {coq.get_last_error()}"
+    coq = create_coq_interface(str(temp_example_copy("example.v")))
 
     try:
         manager = TacticHistoryManager(str(tmp_path / "tactic_history.json"))

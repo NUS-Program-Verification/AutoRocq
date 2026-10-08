@@ -1,6 +1,27 @@
 import pytest
 
 
+@pytest.fixture(scope="module")
+def coq_factory(request):
+    from tests.test_utils import create_coq_interface
+
+    def create(*args, **kwargs):
+        interface = create_coq_interface(*args, **kwargs)
+        request.addfinalizer(interface.close)
+        return interface
+
+    return create
+
+
+@pytest.fixture
+def coq():
+    from tests.test_utils import create_coq_interface, temp_example_copy
+
+    interface = create_coq_interface(temp_example_copy("example.v"))
+    yield interface
+    interface.close()
+
+
 def pytest_addoption(parser):
     parser.addoption(
         "--runllm",

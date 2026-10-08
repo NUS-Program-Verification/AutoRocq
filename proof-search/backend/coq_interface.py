@@ -333,40 +333,30 @@ class CoqInterface:
             self.logger.error(f"Error getting goal string: {e}")
             return f"(error retrieving goals: {str(e)})"
     
+    @staticmethod
+    def format_hypotheses(goal) -> str:
+        """Render each hypothesis with its names, type, and any let-bound value."""
+        lines = []
+        for hyp in getattr(goal, 'hyps', None) or []:
+            names = ', '.join(getattr(hyp, 'names', None) or [])
+            ty = getattr(hyp, 'ty', '')
+            definition = getattr(hyp, 'definition', None)
+            if not names:
+                lines.append(str(ty))
+                continue
+            head = f"{names} := {definition}" if definition else names
+            lines.append(f"{head} : {ty}")
+        return '\n'.join(lines)
+
     def get_raw_hypothesis(self):
-        """Return the current hypotheses/context for the active proof state."""
+        """Return the first focused goal's hypotheses, one per line."""
         try:
-            proof = self.get_unproven_proof()
-            if not proof or not proof.steps:
+            subgoals = self.get_subgoals()
+            if not subgoals:
                 return ""
-            
-            # Get the last step's context/hypotheses
-            last_step = proof.steps[-1]
-            
-            # Try different ways to get hypotheses
-            if hasattr(last_step, 'hypotheses'):
-                hyp = last_step.hypotheses
-            elif hasattr(last_step, 'context'):
-                hyp = last_step.context
-            else:
-                return ""
-            
-            if not hyp:
-                return ""
-            
-            # Handle different hypothesis formats
-            if isinstance(hyp, dict):
-                if not hyp:
-                    return ""
-                hyp_lines = []
-                for name, value in hyp.items():
-                    hyp_lines.append(f"{name} : {value}")
-                return "\n".join(hyp_lines)
-            elif isinstance(hyp, list):
-                return "\n".join(str(h) for h in hyp)
-            else:
-                return str(hyp)
-                
+
+            return self.format_hypotheses(subgoals[0])
+
         except Exception as e:
             self.logger.error(f"Error getting hypotheses: {e}")
             return f"(error retrieving hypotheses: {str(e)})"
@@ -1424,8 +1414,8 @@ class CoqInterface:
             
             # Get CURRENT goals directly from proof_file (not from cached step.goals)
             current_goals = self._get_current_goals_cached()
-            
-            if not current_goals:
+
+            if current_goals is None:
                 self.logger.debug("No current goals available")
                 return []
             

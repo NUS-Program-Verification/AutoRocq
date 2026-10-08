@@ -10,7 +10,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from coqpyt.coq.exceptions import InvalidChangeException
 from coqpyt.coq.proof_file import ProofFile
-from tests.test_utils import temp_example_copy
+from tests.test_utils import temp_example_copy, create_proof_file
 
 # `reflexivity.` alone closes example.v's goal; this route goes through both
 # destruct branches, so the intermediate goal counts below are worth asserting.
@@ -57,8 +57,7 @@ def proof_file():
     """
     file_path = temp_example_copy("example.v")
     clean_proof_file(file_path)
-    with ProofFile(str(file_path), use_disk_cache=True) as pf:
-        pf.run()
+    with create_proof_file(str(file_path), use_disk_cache=True) as pf:
         yield pf
 
 

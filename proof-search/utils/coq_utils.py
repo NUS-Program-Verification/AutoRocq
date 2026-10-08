@@ -2,202 +2,138 @@
 
 import re
 import difflib
-import traceback
+from collections import deque
 from enum import Enum
+from pathlib import Path
 
-def extract_essential_proof_content(logger, proof_file_content):
-    """Extract essential content from proof file: imports and definitions for terms used in the theorem."""
-    try:
-        lines = proof_file_content.split('\n')
-        essential_content = []
 
-        # Step 1: Parse all definitions and their dependencies
-        all_definitions = {}  # name -> {'lines': [...], 'dependencies': set()}
+def _same_file(left, right):
+    """Compare source paths without requiring either path to still exist."""
+    if not left or not right:
+        return False
+    return Path(left).resolve(strict=False) == Path(right).resolve(strict=False)
 
-        current_def = None
-        current_def_lines = []
-        in_comment = False
 
-        for line in lines:
-            line_stripped = line.strip()
+def _referenced_terms(file_context, step):
+    """Resolve global identifiers in a parsed Rocq sentence to CoqPyt terms."""
+    stack = file_context.expr(step)[:0:-1]
+    referenced = []
 
-            # Track multi-line comment state
-            # Check if we're entering or exiting a comment block
-            if '(*' in line_stripped and '*)' in line_stripped:
-                # Single-line comment or inline comment - remove it
-                line_stripped = re.sub(r'\(\*.*?\*\)', '', line_stripped).strip()
-                if not line_stripped:
-                    continue
-            elif '(*' in line_stripped:
-                # Start of multi-line comment
-                in_comment = True
-                # Remove everything after (* on this line
-                line_stripped = line_stripped[:line_stripped.index('(*')].strip()
-                if not line_stripped:
-                    continue
-            elif '*)' in line_stripped:
-                # End of multi-line comment
-                in_comment = False
-                # Remove everything before and including *)
-                line_stripped = line_stripped[line_stripped.index('*)')+2:].strip()
-                if not line_stripped:
-                    continue
-            elif in_comment:
-                # Inside a multi-line comment - skip this line
-                continue
-            
-            # Start of a new definition
-            if line_stripped.startswith(('Definition ', 'Parameter ', 'Axiom ')):
-
-                # Save previous definition if exists
-                if current_def and current_def_lines:
-                    deps = extract_dependencies_from_lines(current_def_lines)
-                    all_definitions[current_def] = {
-                        'lines': current_def_lines[:],
-                        'dependencies': deps
-                    }
-
-                # Start new definition
-                parts = line_stripped.split()
-                if len(parts) >= 2:
-                    current_def = parts[1].rstrip(':')
-                    current_def_lines = [line]
-
-                    # Check if definition ends on same line
-                    if line_stripped.endswith('.'):
-                        deps = extract_dependencies_from_lines(current_def_lines)
-                        all_definitions[current_def] = {
-                            'lines': current_def_lines[:],
-                            'dependencies': deps
-                        }
-                        current_def = None
-                        current_def_lines = []
-                else:
-                    current_def = None
-                    current_def_lines = []
-
-            elif current_def:
-                # Continue collecting lines for current definition
-                current_def_lines.append(line)
-
-                # Check if definition is complete
-                if line_stripped.endswith('.'):
-                    deps = extract_dependencies_from_lines(current_def_lines)
-                    all_definitions[current_def] = {
-                        'lines': current_def_lines[:],
-                        'dependencies': deps
-                    }
-                    current_def = None
-                    current_def_lines = []
-
-        # Step 2: Find the theorem and extract its direct dependencies
-        theorem_found = False
-        theorem_dependencies = set()
-
-        for i, line in enumerate(lines):
-            line_stripped = line.strip()
-            if line_stripped.startswith(('Theorem ', 'Lemma ')):
-                theorem_found = True
-                # Collect the complete theorem statement
-                theorem_lines = []
-                j = i
-                while j < len(lines):
-                    theorem_lines.append(lines[j])
-                    if lines[j].strip().endswith('.') and 'Proof' not in lines[j]:
-                        break
-                    j += 1
-
-                theorem_dependencies = extract_dependencies_from_lines(theorem_lines)
-                break
-            
-        if not theorem_found:
-            return "## Essential proof context:\n(current theorem not found)\n"
-
-        # Step 3: Find all transitive dependencies using dependency graph
-        needed_definitions = find_transitive_dependencies(theorem_dependencies, all_definitions)
-
-        logger.debug(f"All available definitions: {list(all_definitions.keys())}")
-        logger.debug(f"Required definitions: {needed_definitions}")
-        
-        missing_definitions = theorem_dependencies - needed_definitions
-        if len(missing_definitions) > 0:
-            logger.warning(f"Missing definitions for theorem: {list(missing_definitions)}")
-
-        # Step 4: Extract imports
-        imports = []
-        for line in lines:
-            line_stripped = line.strip()
-            is_import = (
-                line_stripped.startswith('Require ')
-                or re.match(r'From\s+\S+\s+Require\b', line_stripped) is not None
-                or line_stripped.startswith('Open Scope ')
+    while stack:
+        element = stack.pop()
+        if file_context.is_id(element):
+            identifier = file_context.get_id(element)
+            term = file_context.get_term(identifier) if identifier else None
+            if term is not None and term not in referenced:
+                referenced.append(term)
+        elif file_context.is_notation(element):
+            # Notation arguments can contain global references.
+            stack.append(element[1:])
+        elif isinstance(element, list):
+            stack.extend(
+                value for value in reversed(element) if isinstance(value, (dict, list))
             )
-            if is_import and not line_stripped.startswith('(*'):
-                clean_line = re.sub(r'\(\*.*?\*\)', '', line_stripped).strip()
-                if clean_line:
-                    imports.append(clean_line)
+        elif isinstance(element, dict):
+            stack.extend(
+                value
+                for value in reversed(element.values())
+                if isinstance(value, (dict, list))
+            )
 
-        # Add imports
-        if imports:
-            essential_content.extend(imports)
-            essential_content.append("")
+    return referenced
 
-        # Add only the needed definitions in dependency order
-        added_definitions = set()
-        for def_name in needed_definitions:
-            if def_name in all_definitions and def_name not in added_definitions:
-                essential_content.extend(all_definitions[def_name]['lines'])
-                essential_content.append("")
-                added_definitions.add(def_name)
 
-        # Add the theorem and proof
-        essential_content.append("")
-        for i, line in enumerate(lines):
-            line_stripped = line.strip()
-            if line_stripped.startswith('Theorem ') or line_stripped.startswith('Lemma '):
-                remaining_lines = lines[i:]
-                clean_remaining = []
-                in_comment = False
-                for line in remaining_lines:
-                    line_stripped = line.strip()
-                    
-                    # Track and remove comments
-                    if '(*' in line_stripped and '*)' in line_stripped:
-                        # Single-line comment - remove it
-                        clean_line = re.sub(r'\(\*.*?\*\)', '', line).rstrip()
-                        if clean_line:
-                            clean_remaining.append(clean_line)
-                    elif '(*' in line_stripped:
-                        # Start of multi-line comment
-                        in_comment = True
-                        clean_line = line[:line.index('(*')].rstrip()
-                        if clean_line:
-                            clean_remaining.append(clean_line)
-                    elif '*)' in line_stripped:
-                        # End of multi-line comment
-                        in_comment = False
-                        clean_line = line[line.index('*)')+2:].rstrip()
-                        if clean_line:
-                            clean_remaining.append(clean_line)
-                    elif not in_comment:
-                        # Not in a comment - keep the line
-                        clean_remaining.append(line.rstrip())
-                
-                essential_content.extend(clean_remaining)
-                break
-            
-        result = '\n'.join(essential_content)
-        result = re.sub(r'\n\s*\n\s*\n', '\n\n', result)
+def _structured_dependencies(proof, file_context, file_path):
+    """Return local declarations needed by a proof in stable source order."""
+    needed = {}
+    pending = deque(proof.context)
 
-        logger.info(f"Extracted essential content: {len(result)} chars")
-        logger.info(f"Found {len(imports)} imports, {len(added_definitions)} definitions")
+    while pending:
+        term = pending.popleft()
+        step = getattr(term, "step", None)
+        if step is None or not _same_file(getattr(term, "file_path", None), file_path):
+            continue
 
-        return result
+        # An inductive type and its constructors share one declaration Step.
+        step_key = id(step)
+        if step_key in needed or step is getattr(proof, "step", None):
+            continue
 
-    except Exception as e:
-        logger.error(f"Error extracting essential content: {e}")
-        traceback.print_exc()
-        return f"## Essential proof context:\nError extracting content: {e}\n"
+        needed[step_key] = term
+        pending.extend(_referenced_terms(file_context, step))
+
+    def source_position(term):
+        start = term.step.ast.range.start
+        return start.line, start.character
+
+    return sorted(needed.values(), key=source_position)
+
+
+def _source_sentence(lines, step):
+    """Slice an end-exclusive LSP range, whose columns count UTF-16 units."""
+    start, end = step.ast.range.start, step.ast.range.end
+    if not (0 <= start.line <= end.line < len(lines)) or (
+        start.line, start.character
+    ) >= (end.line, end.character):
+        raise ValueError("Invalid CoqPyt source range")
+
+    def column(position):
+        encoded = lines[position.line].encode("utf-16-le")
+        if not 0 <= position.character * 2 <= len(encoded):
+            raise ValueError("CoqPyt source column is outside the source line")
+        return len(encoded[:position.character * 2].decode("utf-16-le"))
+
+    first, last = column(start), column(end)
+    if not lines[start.line][:first].strip():
+        first = 0
+    if start.line == end.line:
+        return lines[start.line][first:last]
+    return "\n".join([
+        lines[start.line][first:],
+        *lines[start.line + 1:end.line],
+        lines[end.line][:last],
+    ])
+
+
+def extract_essential_proof_content(
+    logger,
+    proof_file_content,
+    *,
+    proof=None,
+    file_context=None,
+    file_path=None,
+):
+    """Extract imports and dependencies from the current parsed Rocq proof."""
+    missing = [
+        name for name, value in (
+            ("proof", proof), ("file_context", file_context), ("file_path", file_path)
+        ) if value is None
+    ]
+    if missing:
+        message = f"CoqPyt proof context unavailable: {', '.join(missing)} missing"
+        logger.error(message)
+        raise ValueError(message)
+
+    try:
+        lines = proof_file_content.split("\n")
+        declarations = _structured_dependencies(proof, file_context, file_path)
+        imports = []
+        for line in proof_file_content.splitlines():
+            statement = line.partition("(*")[0].strip()
+            words = statement.split()
+            if (
+                statement.startswith(("Require ", "Open Scope "))
+                or (words[:1] == ["From"] and "Require" in words)
+            ):
+                imports.append(statement)
+
+        parts = [*imports, *(_source_sentence(lines, term.step) for term in declarations), _source_sentence(lines, proof.step), *(_source_sentence(lines, step.step) for step in proof.steps)]
+        return "\n\n".join(parts)
+    except Exception as error:
+        message = f"CoqPyt proof context extraction failed: {error}"
+        logger.error(message)
+        raise RuntimeError(message) from error
+
 
 def extract_search_terms(text: str) -> str:
     """
@@ -336,76 +272,6 @@ def hints_from_error(tactic: str, error: str) -> str:
             
     except Exception:
         return ""
-
-
-# Coq built-in identifiers to filter out when extracting dependencies
-COQ_BUILTINS = {
-    'forall', 'fun', 'Prop', 'Type', 'Z', 'Numbers', 'BinNums', 'Datatypes',
-    'true', 'false', 'Init', 'Reals', 'Rdefinitions', 'R', 'ZArith', 'BinInt',
-    'Theorem', 'Lemma', 'Definition', 'Parameter', 'Axiom', 'Proof', 'Qed',
-    'let', 'in', 'match', 'with', 'end', 'if', 'then', 'else', 'nat', 'bool',
-    'list', 'option', 'unit', 'eq', 'and', 'or', 'not', 'exists', 'auto',
-    'intros', 'apply', 'exact', 'assumption', 'constructor', 'destruct',
-    'induction', 'simpl', 'unfold', 'fold', 'reflexivity', 'symmetry',
-    'transitivity', 'rewrite', 'replace', 'assert', 'cut', 'generalize',
-    'clear', 'clearbody', 'move', 'rename', 'pose', 'set', 'remember',
-    'BuiltIn', 'IZR', 'WhyType', 'quot', 'rem', 'abs', 'le', 'lt', 'ge', 'gt'
-}
-
-
-def extract_dependencies_from_lines(lines: list) -> set:
-    """
-    Extract identifiers that could be dependencies from a list of lines.
-    
-    Args:
-        lines: List of code lines to analyze
-        
-    Returns:
-        Set of identifier names that are likely custom definitions
-    """
-    dependencies = set()
-
-    # Join all lines and extract identifiers
-    content = ' '.join(lines)
-
-    # Remove Coq syntax and extract custom identifiers
-    # Pattern to match identifiers that are likely custom definitions
-    identifiers = re.findall(r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b', content)
-
-    for identifier in identifiers:
-        if (identifier not in COQ_BUILTINS and
-            not identifier.startswith('_') and
-            len(identifier) > 1 and
-            not identifier.isdigit() and
-            not identifier[0].isupper() or identifier.startswith('is_') or identifier.startswith('to_')):
-            dependencies.add(identifier)
-
-    return dependencies
-
-
-def find_transitive_dependencies(root_dependencies, all_definitions):
-    """Find all transitive dependencies starting from root dependencies."""
-    needed = set()
-    to_process = list(root_dependencies)
-    processed = set()
-
-    while to_process:
-        current = to_process.pop(0)
-
-        if current in processed:
-            continue
-
-        processed.add(current)
-
-        # If this dependency has a definition, include it and its dependencies
-        if current in all_definitions:
-            needed.add(current)
-            # Add dependencies of this definition to processing queue
-            for dep in all_definitions[current]['dependencies']:
-                if dep not in processed:
-                    to_process.append(dep)
-
-    return needed
 
 
 def extract_goal_pattern(goals: str) -> str:

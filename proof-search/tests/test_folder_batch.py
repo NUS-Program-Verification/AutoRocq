@@ -12,7 +12,7 @@ import pytest
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from backend.coq_interface import CoqInterface
+from tests.test_utils import create_coq_interface
 from agent.context_manager import ContextManager
 from agent.proof_controller import ProofController
 from utils.config import ProofAgentConfig
@@ -89,14 +89,7 @@ def prove_single_file(
         coq_interface = None
         try:
             # CoqInterface proves on a copy, so the benchmark file is never touched.
-            coq_interface = CoqInterface(
-                file_path=str(coq_file),
-                workspace=config.coq.workspace or str(Path(coq_file).parent),
-                library_paths=config.coq.library_paths,
-                auto_setup_coqproject=config.coq.auto_setup_coqproject,
-                coqproject_extra_options=config.coq.coqproject_extra_options,
-                timeout=config.coq.timeout
-            )
+            coq_interface = create_coq_interface(coq_file, config=config, load=False)
             
             try:
                 if not clean_proof_file(coq_interface.file_path):

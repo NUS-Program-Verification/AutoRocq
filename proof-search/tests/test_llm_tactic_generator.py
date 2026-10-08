@@ -11,8 +11,6 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from agent.context_manager import ContextManager
 from agent.proof_tree import ProofTree
-from backend.coq_interface import CoqInterface
-from tests.test_utils import temp_example_copy
 from utils.config import ProofAgentConfig
 
 config_file = PROJECT_ROOT / "configs" / "default_config.json"
@@ -28,16 +26,6 @@ def config():
     if not loaded.llm.api_key:
         pytest.skip("needs an LLM API key")
     return loaded
-
-
-@pytest.fixture
-def coq():
-    interface = CoqInterface(str(temp_example_copy("example.v")))
-    assert interface.load(), f"load() failed: {interface.get_last_error()}"
-    try:
-        yield interface
-    finally:
-        interface.close()
 
 
 def test_context_manager_wires_up_its_collaborators(config, coq):

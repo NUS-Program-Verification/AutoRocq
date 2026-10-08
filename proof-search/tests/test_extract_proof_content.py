@@ -1,196 +1,328 @@
-#!/usr/bin/env python3
-"""
-Simple test script for extract_essential_proof_content function using real file
-"""
+"""Parsed Rocq dependencies determine the proof context shown to the LLM."""
 
 import sys
-from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
+from pathlib import Path
 
-# Add project root to path
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from backend.coq_interface import CoqInterface
-from agent.context_manager import ContextManager
-from utils.config import ProofAgentConfig
 from tests.test_utils import (
-    configure_test_library,
-    reset_coq_file_to_admitted,
-    restore_coq_file_from_backup,
-    temp_example_copy,
+    configure_test_library, create_coq_interface, create_proof_file, temp_example_copy,
 )
+from utils.coq_utils import extract_essential_proof_content
+from coqpyt.lsp.structs import Position, Range
+from utils.config import ProofAgentConfig
+from agent.context_manager import ContextManager
+from utils.logger import setup_logger
+
+logger = setup_logger("test_extract_proof_content")
+
+GOAL_FILE = PROJECT_ROOT / "examples" / "main_loop_invariant_2_established_Coq.v"
 
 
-# --- CONFIGURATION ---
-coq_file = temp_example_copy("main_loop_invariant_2_established_Coq.v")
-config_file = PROJECT_ROOT / "configs" / "default_config.json"
+def extract(content, tmp_path):
+    path = tmp_path / "context.v"
+    path.write_text(content, encoding="utf-8")
+    return extract_with_coqpyt(path)
 
 
-def clean_proof_file(file_path):
-    """Clean the proof file using shared utility."""
-    print("\n🧹 CLEANING PROOF FILE...")
-    print("="*60)
-    
-    success = reset_coq_file_to_admitted(file_path, backup=True)
-    if success:
-        print("✅ File cleaned successfully - reset to 'Proof. Admitted.'")
-    else:
-        print("❌ Failed to clean file")
-    return success
+@pytest.fixture(scope="module")
+def extracted_goal(coq_factory):
+    config = configure_test_library(
+        ProofAgentConfig.from_file(str(PROJECT_ROOT / "configs" / "default_config.json"))
+    )
+    interface = coq_factory(temp_example_copy(GOAL_FILE.name), config=config)
+    manager = ContextManager.__new__(ContextManager)
+    manager.coq, manager.logger = interface, logger
+    return manager.extract_essential_proof_content(interface.get_proof_file_content())
 
-def test_extract_with_real_file():
-    """Test the extract_essential_proof_content function with the real Coq file"""
-    
-    print("🧪 Testing extract_essential_proof_content with real file")
-    print("=" * 70)
-    print(f"📁 File: {coq_file}")
-    print(f"📄 Config: {config_file}")
-    
-    try:
-        # Check if file exists
-        if not coq_file.exists():
-            pytest.fail(f"file not found: {coq_file}")
-        
-        assert clean_proof_file(coq_file)
-        # Check if config file exists
-        if not config_file.exists():
-            pytest.fail(f"config file not found: {config_file}")
-        
-        # Read the file
-        print("📖 Reading file...")
-        with open(coq_file, 'r', encoding='utf-8') as f:
-            content = f.read()
-        
-        print(f"✅ File loaded successfully")
-        print(f"📊 Original file statistics:")
-        print(f"   - Size: {len(content):,} characters")
-        print(f"   - Lines: {len(content.splitlines()):,}")
-        print(f"   - Contains 'is_sint32': {'is_sint32' in content}")
-        print(f"   - Contains 'wp_goal': {'wp_goal' in content}")
-        
-        # Create ContextManager
-        print("\n🔧 Creating ContextManager...")
-        
-        # Load configuration from file
-        print(f"📄 Loading config from: {config_file}")
-        config = configure_test_library(ProofAgentConfig.from_file(str(config_file)))
-        print(f"✅ Loaded configuration from {config_file}")
-        
-        # Create CoqInterface
-        coq_interface = CoqInterface(
-            file_path=str(coq_file),
-            workspace=config.coq.workspace or str(coq_file.parent),
-            library_paths=config.coq.library_paths,
-            auto_setup_coqproject=config.coq.auto_setup_coqproject,
-            timeout=config.coq.timeout
+
+def extract_with_coqpyt(path):
+    with create_proof_file(str(path), use_disk_cache=True) as proof_file:
+        proof = proof_file.unproven_proofs[0]
+        return extract_essential_proof_content(
+            logger,
+            path.read_text(encoding="utf-8"),
+            proof=proof,
+            file_context=proof_file.context,
+            file_path=proof_file.path,
         )
-        assert coq_interface.load(), coq_interface.get_last_error()
-        
-        try:
-            # Create ContextManager
-            context_manager = ContextManager(coq_interface, api_key=config.llm.api_key)
-            print("✅ ContextManager created")
-            
-            # Extract essential content
-            print("\n🔄 Extracting essential content...")
-            extracted = context_manager.extract_essential_proof_content(content)
-            print("✅ Extraction completed")
-            
-            # Analyze results
-            print(f"\n📊 Extraction results:")
-            extracted_lines = extracted.splitlines()
-            print(f"   - Extracted size: {len(extracted):,} characters")
-            print(f"   - Extracted lines: {len(extracted_lines):,}")
-            print(f"   - Compression ratio: {len(extracted)/len(content):.1%}")
-            print(f"   - Size reduction: {len(content) - len(extracted):,} characters")
-            
-            # Validate content
-            print(f"\n✅ Content validation:")
-            checks = {
-                "Has Require imports": any("Require " in line for line in extracted_lines),
-                "Has ZArith import": "From Stdlib Require Import ZArith Lia." in extracted,
-                "Has Open Scope": "Open Scope Z_scope." in extracted,
-                "Has wp_goal theorem": "Theorem wp_goal" in extracted
-            }
-            
-            all_passed = True
-            for check_name, result in checks.items():
-                status = "✅" if result else "❌"
-                print(f"   {status} {check_name}")
-                if not result:
-                    all_passed = False
-            
-            # Show extracted content preview
-            print(f"\n📋 Extracted content preview:")
-            print("=" * 70)
-            preview_lines = extracted_lines[:30]  # Show first 30 lines
-            for i, line in enumerate(preview_lines, 1):
-                print(f"{i:2d}: {line}")
-            
-            if len(extracted_lines) > 30:
-                print(f"... (showing first 30 of {len(extracted_lines)} total lines)")
-            
-            print("=" * 70)
-            
-            # Show what was filtered out
-            print(f"\n🔍 Filtering analysis:")
-            original_requires = len([line for line in content.splitlines() if line.strip().startswith("Require ")])
-            extracted_requires = len([line for line in extracted_lines if line.strip().startswith("Require ")])
-            
-            original_definitions = len([line for line in content.splitlines() if "Definition " in line or "Parameter " in line or "Axiom " in line])
-            extracted_definitions = len([line for line in extracted_lines if "Definition " in line or "Parameter " in line or "Axiom " in line])
-            
-            print(f"   - Original Require statements: {original_requires}")
-            print(f"   - Extracted Require statements: {extracted_requires}")
-            print(f"   - Original definitions/parameters/axioms: {original_definitions}")
-            print(f"   - Extracted definitions/parameters/axioms: {extracted_definitions}")
-            print(f"   - Filtered out: {original_definitions - extracted_definitions} definitions")
-            
-            # Final result
-            print(f"\n🏁 Test Result:")
-            if all_passed:
-                print("🎉 SUCCESS! Function works correctly")
-                print("✅ Essential content extracted properly")
-                print("✅ Comments removed")
-                print("✅ Only relevant definitions included")
-                print("✅ Theorem and proof preserved")
-            else:
-                print("❌ FAILED! Some checks didn't pass")
-            
-            assert all_passed, checks
-        
-        finally:
-            coq_interface.close()
-        
-    except Exception as e:
-        pytest.fail(f"proof-content extraction failed: {e}")
 
-if __name__ == "__main__":
-    print("🚀 Simple Essential Content Extraction Test")
-    print("=" * 70)
-    
-    # Run the test
-    test_extract_with_real_file()
-    success = True
-    
-    # Final summary
-    print("\n" + "=" * 70)
-    if success:
-        print("🎉 TEST PASSED!")
-        print("✅ extract_essential_proof_content function works correctly")
-        print("✅ Ready for use in ContextManager")
+
+def test_initial_prompt_resolves_parsed_dependencies_without_an_llm(tmp_path):
+    # Program declarations require parsed context; the binder shadows a global.
+    source = "\n".join(
+        [
+            "From Stdlib Require Import Program.",
+            "Program Definition hidden_value : nat := 7.",
+            "Definition used_value : nat := hidden_value.",
+            "Definition unused_value : nat := 42.",
+            "Theorem wp_goal : forall unused_value : nat, used_value = used_value.",
+            "Proof.",
+            "Admitted.",
+        ]
+    )
+    path = tmp_path / "prompt_context.v"
+    path.write_text(source, encoding="utf-8")
+    interface = create_coq_interface(str(path), timeout=60)
+    try:
+
+        # Prompt construction needs the loaded proof, not a chat session.
+        manager = ContextManager.__new__(ContextManager)
+        manager.coq = interface
+        manager.logger = logger
+        manager.proof_plan = None
+        prompt = manager.build_initial_prompt("")
+
+        assert "Program Definition hidden_value : nat := 7." in prompt
+        assert "Definition used_value : nat := hidden_value." in prompt
+        assert "Definition unused_value" not in prompt
+        assert prompt.count("Theorem wp_goal") == 1
+        assert prompt.index("Program Definition hidden_value") < prompt.index(
+            "Definition used_value"
+        )
+    finally:
+        interface.close()
+
+
+def test_a_why3_goal_file_keeps_its_imports_theorem_and_used_definitions(extracted_goal):
+    """The three things the prompt cannot do without, on the real fixture."""
+    extracted = extracted_goal
+
+    assert "Require Import BuiltIn." in extracted
+    assert "From Stdlib Require Import ZArith Lia." in extracted
+    assert "Open Scope Z_scope." in extracted
+
+    assert "Theorem wp_goal :" in extracted
+    assert "is_sint32 i ->" in extracted
+    assert "Proof." in extracted
+
+    assert "Definition is_sint32" in extracted
+
+
+def test_definitions_the_theorem_never_mentions_are_dropped(extracted_goal):
+    """Keep the prompt substantially smaller than the source file."""
+    content = GOAL_FILE.read_text(encoding="utf-8")
+    extracted = extracted_goal
+
+    for unused in [
+        "Definition is_uint8",
+        "Definition is_sint8",
+        "Definition is_sint64",
+        "Definition real_of_int",
+        "Parameter zlt:",
+        "Parameter to_sint64:",
+        "Axiom cmod_remainder",
+    ]:
+        assert unused not in extracted, f"{unused!r} survived but is unused"
+
+    assert len(extracted) < len(content) / 4, (
+        f"barely trimmed anything: {len(content)} -> {len(extracted)}"
+    )
+    assert max(map(len, extracted.splitlines())) <= max(map(len, content.splitlines()))
+
+
+def test_why3_comments_are_stripped(extracted_goal):
+    extracted = extracted_goal
+
+    assert "(* Why3 goal *)" not in extracted
+    assert "(* Why3 assumption *)" not in extracted
+    assert "Beware! Only edit allowed sections" not in extracted
+
+
+def test_transitive_dependencies_are_followed(tmp_path):
+    """A definition the theorem reaches only through another must be kept."""
+    source = "\n".join(
+        [
+            "From Stdlib Require Import ZArith.",
+            "Open Scope Z_scope.",
+            "",
+            "Definition is_small (x:Z) : Prop := (0 <= x)%Z.",
+            "",
+            "Definition is_tiny (x:Z) : Prop := is_small x /\\ (x < 8)%Z.",
+            "",
+            "Definition is_unrelated (x:Z) : Prop := (x < 0)%Z.",
+            "",
+            "Theorem t : forall (x:Z), is_tiny x -> (0 <= x)%Z.",
+            "Proof.",
+            "Admitted.",
+        ]
+    )
+
+    extracted = extract(source, tmp_path)
+
+    assert "Definition is_tiny" in extracted, "the direct dependency is missing"
+    assert "Definition is_small" in extracted, "the transitive dependency is missing"
+    assert "Definition is_unrelated" not in extracted
+    assert "Theorem t :" in extracted
+    assert "From Stdlib Require Import ZArith." in extracted
+
+
+def test_inductive_dependencies_are_kept(tmp_path):
+    source = "\n".join(
+        [
+            "Inductive addr :=",
+            "  | addr'mk : nat -> addr.",
+            "Definition address_value (a : addr) : nat :=",
+            "  match a with addr'mk n => n end.",
+            "Theorem wp_goal : forall a : addr, address_value a = address_value a.",
+            "Proof.",
+            "Admitted.",
+        ]
+    )
+
+    extracted = extract(source, tmp_path)
+
+    assert "Inductive addr" in extracted
+    assert "addr'mk : nat -> addr" in extracted
+    assert "Definition address_value" in extracted
+
+
+def test_coqpyt_context_handles_declaration_forms_and_transitive_dependencies(
+    tmp_path, caplog
+):
+    source = "\n".join(
+        [
+            "From Stdlib Require Import Arith.",
+            "Inductive addr :=",
+            "  | addr'mk : nat -> addr.",
+            "Record box := { unbox : addr }.",
+            "Fixpoint countdown (n : nat) : nat :=",
+            "  match n with O => O | S n' => countdown n' end.",
+            "Definition address_value (a : addr) : nat :=",
+            "  match a with addr'mk n => countdown n end.",
+            "Definition boxed_value (b : box) : nat := address_value (unbox b).",
+            "Definition unused_value : nat := 42.",
+            "Theorem earlier : True. Proof. exact I. Qed.",
+            "Theorem wp_goal : forall (b : box), boxed_value b = boxed_value b.",
+            "Proof.",
+            "Admitted.",
+        ]
+    )
+    path = tmp_path / "declarations.v"
+    path.write_text(source, encoding="utf-8")
+
+    extracted = extract_with_coqpyt(path)
+
+    expected = [
+        "Inductive addr",
+        "Record box",
+        "Fixpoint countdown",
+        "Definition address_value",
+        "Definition boxed_value",
+        "Theorem wp_goal",
+    ]
+    positions = [extracted.index(fragment) for fragment in expected]
+    assert positions == sorted(positions)
+    assert "addr'mk : nat -> addr" in extracted
+    assert "Definition unused_value" not in extracted
+    assert "Theorem earlier" not in extracted
+    assert "Inductive addr :=\n  | addr'mk : nat -> addr." in extracted
+    assert "Fixpoint countdown (n : nat) : nat :=\n  match n with O => O | S n' => countdown n' end." in extracted
+    assert "Missing definitions for theorem" not in caplog.text
+
+
+def test_coqpyt_context_deduplicates_an_inductive_and_its_constructor(tmp_path):
+    source = "\n".join(
+        [
+            "Inductive addr :=",
+            "  | addr'mk : nat -> addr.",
+            "Theorem wp_goal : forall n, addr'mk n = addr'mk n.",
+            "Proof.",
+            "Admitted.",
+        ]
+    )
+    path = tmp_path / "constructor.v"
+    path.write_text(source, encoding="utf-8")
+
+    extracted = extract_with_coqpyt(path)
+
+    assert extracted.count("Inductive addr") == 1
+    assert extracted.count("addr'mk : nat -> addr") == 1
+
+
+@pytest.mark.parametrize("missing", ["proof", "file_context", "file_path"])
+def test_missing_parsed_context_is_an_error(missing):
+    inputs = dict(proof=object(), file_context=object(), file_path="/proof.v")
+    inputs[missing] = None
+    log = Mock()
+    with pytest.raises(ValueError, match=f"{missing} missing"):
+        extract_essential_proof_content(log, "Theorem t : True.", **inputs)
+    log.error.assert_called_once()
+
+
+def test_coqpyt_extraction_failure_is_not_hidden(monkeypatch):
+    def fail(*args):
+        raise LookupError("unresolved declaration")
+
+    monkeypatch.setattr("utils.coq_utils._structured_dependencies", fail)
+    with pytest.raises(RuntimeError, match="unresolved declaration") as error:
+        extract_essential_proof_content(
+            Mock(), "Theorem t : True.", proof=object(),
+            file_context=object(), file_path="/proof.v",
+        )
+    assert isinstance(error.value.__cause__, LookupError)
+
+
+def test_initial_prompt_requires_loaded_coqpyt_context():
+    manager = ContextManager.__new__(ContextManager)
+    manager.coq = Mock(proof=None, proof_file=None, file_path="/proof.v")
+    manager.coq.get_proof_file_content.return_value = "Theorem t : True."
+    manager.logger = Mock()
+    with pytest.raises(ValueError, match="proof, file_context missing"):
+        manager.build_initial_prompt("")
+
+
+def test_the_goal_is_not_emitted_as_its_own_dependency(tmp_path):
+    source = "\n".join(
+        [
+            "From Stdlib Require Import ZArith.",
+            "Definition is_small (x:Z) : Prop := (0 <= x)%Z.",
+            "Theorem wp_goal : forall (x:Z), is_small x -> (0 <= x)%Z.",
+            "Proof.",
+            "Admitted.",
+        ]
+    )
+
+    extracted = extract(source, tmp_path)
+
+    assert extracted.count("Theorem wp_goal") == 1
+    assert "Definition is_small" in extracted
+
+
+def test_multiline_theorem_and_proof_keep_source_formatting(tmp_path):
+    declaration = "Definition identity (n : nat) : nat :=\n  n."
+    theorem = "Theorem current :\n  forall n : nat,\n    identity n = n."
+    tactic = "  exact\n    (eq_refl n)."
+    source = (
+        declaration + "\n"
+        "Theorem earlier : True. Proof. exact I. Qed.\n"
+        "(* 🦔 current proof *) " + theorem + "\n"
+        "Proof.\n  intros n.\n" + tactic + "\nAdmitted.\n"
+    )
+    extracted = extract(source, tmp_path)
+    assert declaration in extracted
+    assert theorem in extracted
+    assert tactic in extracted
+    assert "Theorem earlier" not in extracted
+    assert "(* 🦔 current proof *)" not in extracted
+
+
+@pytest.mark.parametrize("invalid", [False, True])
+def test_source_ranges_use_utf16_and_reject_invalid_columns(monkeypatch, invalid):
+    source = '(* 🦔 *) Theorem current : True.'
+    start = len('(* 🦔 *) '.encode("utf-16-le")) // 2
+    end = len(source.encode("utf-16-le")) // 2 + int(invalid)
+    step = SimpleNamespace(ast=SimpleNamespace(range=Range(Position(0, start), Position(0, end))))
+    proof = SimpleNamespace(step=step, steps=[])
+    monkeypatch.setattr("utils.coq_utils._structured_dependencies", lambda *args: [])
+    inputs = dict(proof=proof, file_context=object(), file_path="/proof.v")
+    if invalid:
+        with pytest.raises(RuntimeError, match="outside the source line"):
+            extract_essential_proof_content(Mock(), source, **inputs)
     else:
-        print("❌ TEST FAILED!")
-        print("🔧 Function needs debugging")
-    
-    print(f"\n💡 What this test verified:")
-    print(f"   - ✅ Real file processing")
-    print(f"   - ✅ Comment removal") 
-    print(f"   - ✅ Import extraction")
-    print(f"   - ✅ Definition filtering")
-    print(f"   - ✅ Theorem preservation")
-    print(f"   - ✅ Content compression")
-    
-    sys.exit(0 if success else 1)
+        assert extract_essential_proof_content(Mock(), source, **inputs) == "Theorem current : True."

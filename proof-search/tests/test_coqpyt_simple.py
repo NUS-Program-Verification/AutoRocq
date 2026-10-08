@@ -12,8 +12,8 @@ import pytest
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from coqpyt.coq.proof_file import ProofFile
 from tests.test_utils import (
+    create_proof_file,
     reset_coq_file_to_admitted,
     restore_coq_file_from_backup,
     temp_example_copy,
@@ -40,8 +40,7 @@ def open_proof():
     )
 
     try:
-        with ProofFile(str(file_path), timeout=60, use_disk_cache=True) as proof_file:
-            proof_file.run()
+        with create_proof_file(str(file_path), timeout=60, use_disk_cache=True) as proof_file:
 
             assert proof_file.proofs, "no proofs at all in the file"
             assert proof_file.unproven_proofs, "the reset left no unproven proof"

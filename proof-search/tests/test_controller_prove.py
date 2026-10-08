@@ -12,7 +12,7 @@ from backend.coq_interface import CoqInterface
 from agent.context_manager import ContextManager
 from agent.proof_controller import ProofController
 from utils.config import ProofAgentConfig
-from tests.test_utils import configure_test_library, temp_example_copy
+from tests.test_utils import configure_test_library, temp_example_copy, create_coq_interface
 
 # --- CONFIGURATION ---
 coq_file = temp_example_copy("main_loop_invariant_2_established_Coq.v")
@@ -62,18 +62,11 @@ def test_prove_theorem():
         
         # Create CoqInterface
         print("🔧 Step 3: Create CoqInterface")
-        coq_interface = CoqInterface(
-            file_path=str(coq_file),
-            workspace=config.coq.workspace or str(coq_file.parent),
-            library_paths=config.coq.library_paths,
-            auto_setup_coqproject=config.coq.auto_setup_coqproject,
-            timeout=config.coq.timeout
-        )
+        coq_interface = create_coq_interface(coq_file, config=config)
         
         try:
             # Load the file
             print("📂 Step 4: Load Coq file")
-            assert coq_interface.load(), coq_interface.get_last_error()
             print("✅ Coq file loaded")
             
             # Create ContextManager

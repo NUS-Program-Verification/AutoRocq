@@ -17,7 +17,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from coqpyt.coq.exceptions import InvalidChangeException
 from coqpyt.coq.proof_file import ProofFile
-from tests.test_utils import configure_test_library, temp_example_copy
+from tests.test_utils import configure_test_library, temp_example_copy, create_proof_file
 from utils.config import ProofAgentConfig
 
 config_file = PROJECT_ROOT / "configs" / "default_config.json"
@@ -55,13 +55,12 @@ def open_proof():
     (coq_file.parent / "_CoqProject").write_text(
         f"-R {library['path']} {library['name']}\n"
     )
-    with ProofFile(
+    with create_proof_file(
         str(coq_file),
         workspace=str(coq_file.parent),
         timeout=60,
         use_disk_cache=True,
     ) as proof_file:
-        proof_file.run()
 
         assert proof_file.unproven_proofs, (
             "no unproven proof: the libframac mapping probably did not resolve"

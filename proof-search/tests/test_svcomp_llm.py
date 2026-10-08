@@ -14,7 +14,7 @@ from backend.coq_interface import CoqInterface
 from agent.context_manager import ContextManager
 from agent.proof_controller import ProofController
 from utils.config import ProofAgentConfig
-from tests.test_utils import configure_test_library, temp_example_copy
+from tests.test_utils import configure_test_library, temp_example_copy, create_coq_interface
 
 # --- CONFIGURATION ---
 coq_file = temp_example_copy("main_loop_invariant_2_established_Coq.v")
@@ -126,20 +126,12 @@ def test_llm_proof_generation_with_controller():
         print(f"⚙️ Auto setup CoqProject: {config.coq.auto_setup_coqproject}")
         
         # Initialize CoqInterface using configuration
-        coq_interface = CoqInterface(
-            file_path=str(coq_file),
-            workspace=config.coq.workspace or str(coq_file.parent),
-            library_paths=config.coq.library_paths,
-            auto_setup_coqproject=config.coq.auto_setup_coqproject,
-            coqproject_extra_options=config.coq.coqproject_extra_options,
-            timeout=config.coq.timeout
-        )
+        coq_interface = create_coq_interface(coq_file, config=config)
         
         try:
             print("✅ Created CoqInterface with auto-configured libraries")
             
             # Load the cleaned file
-            assert coq_interface.load(), coq_interface.get_last_error()
             
             print("✅ Cleaned file loaded successfully")
             
