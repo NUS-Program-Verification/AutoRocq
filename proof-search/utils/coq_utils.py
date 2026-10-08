@@ -127,9 +127,7 @@ def extract_essential_proof_content(
             ):
                 imports.append(statement)
 
-        parts = imports + [_source_sentence(lines, term.step) for term in declarations]
-        parts.append(_source_sentence(lines, proof.step))
-        parts.extend(_source_sentence(lines, step.step) for step in proof.steps)
+        parts = [*imports, *(_source_sentence(lines, term.step) for term in declarations), _source_sentence(lines, proof.step), *(_source_sentence(lines, step.step) for step in proof.steps)]
         return "\n\n".join(parts)
     except Exception as error:
         message = f"CoqPyt proof context extraction failed: {error}"
