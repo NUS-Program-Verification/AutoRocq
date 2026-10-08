@@ -69,6 +69,32 @@ def _structured_dependencies(proof, file_context, file_path):
     return sorted(needed.values(), key=source_position)
 
 
+def _source_sentence(lines, step):
+    """Slice an end-exclusive LSP range, whose columns count UTF-16 units."""
+    start, end = step.ast.range.start, step.ast.range.end
+    if not (0 <= start.line <= end.line < len(lines)) or (
+        start.line, start.character
+    ) >= (end.line, end.character):
+        raise ValueError("Invalid CoqPyt source range")
+
+    def column(position):
+        encoded = lines[position.line].encode("utf-16-le")
+        if not 0 <= position.character * 2 <= len(encoded):
+            raise ValueError("CoqPyt source column is outside the source line")
+        return len(encoded[:position.character * 2].decode("utf-16-le"))
+
+    first, last = column(start), column(end)
+    if not lines[start.line][:first].strip():
+        first = 0
+    if start.line == end.line:
+        return lines[start.line][first:last]
+    return "\n".join([
+        lines[start.line][first:],
+        *lines[start.line + 1:end.line],
+        lines[end.line][:last],
+    ])
+
+
 def extract_essential_proof_content(
     logger,
     proof_file_content,
@@ -89,6 +115,7 @@ def extract_essential_proof_content(
         raise ValueError(message)
 
     try:
+        lines = proof_file_content.split("\n")
         declarations = _structured_dependencies(proof, file_context, file_path)
         imports = []
         for line in proof_file_content.splitlines():
@@ -100,9 +127,9 @@ def extract_essential_proof_content(
             ):
                 imports.append(statement)
 
-        parts = imports + [term.text for term in declarations]
-        parts.append(proof.text)
-        parts.extend(step.step.short_text for step in proof.steps)
+        parts = imports + [_source_sentence(lines, term.step) for term in declarations]
+        parts.append(_source_sentence(lines, proof.step))
+        parts.extend(_source_sentence(lines, step.step) for step in proof.steps)
         return "\n\n".join(parts)
     except Exception as error:
         message = f"CoqPyt proof context extraction failed: {error}"

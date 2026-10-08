@@ -1,6 +1,7 @@
 """Parsed Rocq dependencies determine the proof context shown to the LLM."""
 
 import sys
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -13,6 +14,7 @@ from tests.test_utils import (
     configure_test_library, create_coq_interface, create_proof_file, temp_example_copy,
 )
 from utils.coq_utils import extract_essential_proof_content
+from coqpyt.lsp.structs import Position, Range
 from utils.config import ProofAgentConfig
 from agent.context_manager import ContextManager
 from utils.logger import setup_logger
@@ -121,6 +123,7 @@ def test_definitions_the_theorem_never_mentions_are_dropped(extracted_goal):
     assert len(extracted) < len(content) / 4, (
         f"barely trimmed anything: {len(content)} -> {len(extracted)}"
     )
+    assert max(map(len, extracted.splitlines())) <= max(map(len, content.splitlines()))
 
 
 def test_why3_comments_are_stripped(extracted_goal):
@@ -218,6 +221,8 @@ def test_coqpyt_context_handles_declaration_forms_and_transitive_dependencies(
     assert "addr'mk : nat -> addr" in extracted
     assert "Definition unused_value" not in extracted
     assert "Theorem earlier" not in extracted
+    assert "Inductive addr :=\n  | addr'mk : nat -> addr." in extracted
+    assert "Fixpoint countdown (n : nat) : nat :=\n  match n with O => O | S n' => countdown n' end." in extracted
     assert "Missing definitions for theorem" not in caplog.text
 
 
@@ -287,3 +292,37 @@ def test_the_goal_is_not_emitted_as_its_own_dependency(tmp_path):
 
     assert extracted.count("Theorem wp_goal") == 1
     assert "Definition is_small" in extracted
+
+
+def test_multiline_theorem_and_proof_keep_source_formatting(tmp_path):
+    declaration = "Definition identity (n : nat) : nat :=\n  n."
+    theorem = "Theorem current :\n  forall n : nat,\n    identity n = n."
+    tactic = "  exact\n    (eq_refl n)."
+    source = (
+        declaration + "\n"
+        "Theorem earlier : True. Proof. exact I. Qed.\n"
+        "(* 🦔 current proof *) " + theorem + "\n"
+        "Proof.\n  intros n.\n" + tactic + "\nAdmitted.\n"
+    )
+    extracted = extract(source, tmp_path)
+    assert declaration in extracted
+    assert theorem in extracted
+    assert tactic in extracted
+    assert "Theorem earlier" not in extracted
+    assert "(* 🦔 current proof *)" not in extracted
+
+
+@pytest.mark.parametrize("invalid", [False, True])
+def test_source_ranges_use_utf16_and_reject_invalid_columns(monkeypatch, invalid):
+    source = '(* 🦔 *) Theorem current : True.'
+    start = len('(* 🦔 *) '.encode("utf-16-le")) // 2
+    end = len(source.encode("utf-16-le")) // 2 + int(invalid)
+    step = SimpleNamespace(ast=SimpleNamespace(range=Range(Position(0, start), Position(0, end))))
+    proof = SimpleNamespace(step=step, steps=[])
+    monkeypatch.setattr("utils.coq_utils._structured_dependencies", lambda *args: [])
+    inputs = dict(proof=proof, file_context=object(), file_path="/proof.v")
+    if invalid:
+        with pytest.raises(RuntimeError, match="outside the source line"):
+            extract_essential_proof_content(Mock(), source, **inputs)
+    else:
+        assert extract_essential_proof_content(Mock(), source, **inputs) == "Theorem current : True."
