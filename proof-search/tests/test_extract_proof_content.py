@@ -1,23 +1,19 @@
-"""
-extract_essential_proof_content: the context trimmer that decides what the LLM
-gets to see of a Why3-generated goal file.
-
-The fallback is pure text processing, while the runtime path uses CoqPyt's
-parsed context to distinguish global references from binders and declaration
-names.
-"""
+"""Parsed Rocq dependencies determine the proof context shown to the LLM."""
 
 import sys
+from unittest.mock import Mock
+
+import pytest
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from tests.test_utils import create_coq_interface, create_proof_file
-from utils.coq_utils import (
-    extract_essential_proof_content,
-    find_transitive_dependencies,
+from tests.test_utils import (
+    configure_test_library, create_coq_interface, create_proof_file, temp_example_copy,
 )
+from utils.coq_utils import extract_essential_proof_content
+from utils.config import ProofAgentConfig
 from agent.context_manager import ContextManager
 from utils.logger import setup_logger
 
@@ -26,8 +22,21 @@ logger = setup_logger("test_extract_proof_content")
 GOAL_FILE = PROJECT_ROOT / "examples" / "main_loop_invariant_2_established_Coq.v"
 
 
-def extract(content):
-    return extract_essential_proof_content(logger, content)
+def extract(content, tmp_path):
+    path = tmp_path / "context.v"
+    path.write_text(content, encoding="utf-8")
+    return extract_with_coqpyt(path)
+
+
+@pytest.fixture(scope="module")
+def extracted_goal(coq_factory):
+    config = configure_test_library(
+        ProofAgentConfig.from_file(str(PROJECT_ROOT / "configs" / "default_config.json"))
+    )
+    interface = coq_factory(temp_example_copy(GOAL_FILE.name), config=config)
+    manager = ContextManager.__new__(ContextManager)
+    manager.coq, manager.logger = interface, logger
+    return manager.extract_essential_proof_content(interface.get_proof_file_content())
 
 
 def extract_with_coqpyt(path):
@@ -78,10 +87,9 @@ def test_initial_prompt_resolves_parsed_dependencies_without_an_llm(tmp_path):
         interface.close()
 
 
-def test_a_why3_goal_file_keeps_its_imports_theorem_and_used_definitions():
+def test_a_why3_goal_file_keeps_its_imports_theorem_and_used_definitions(extracted_goal):
     """The three things the prompt cannot do without, on the real fixture."""
-    content = GOAL_FILE.read_text(encoding="utf-8")
-    extracted = extract(content)
+    extracted = extracted_goal
 
     assert "Require Import BuiltIn." in extracted
     assert "From Stdlib Require Import ZArith Lia." in extracted
@@ -94,10 +102,10 @@ def test_a_why3_goal_file_keeps_its_imports_theorem_and_used_definitions():
     assert "Definition is_sint32" in extracted
 
 
-def test_definitions_the_theorem_never_mentions_are_dropped():
+def test_definitions_the_theorem_never_mentions_are_dropped(extracted_goal):
     """Keep the prompt substantially smaller than the source file."""
     content = GOAL_FILE.read_text(encoding="utf-8")
-    extracted = extract(content)
+    extracted = extracted_goal
 
     for unused in [
         "Definition is_uint8",
@@ -115,16 +123,15 @@ def test_definitions_the_theorem_never_mentions_are_dropped():
     )
 
 
-def test_why3_comments_are_stripped():
-    content = GOAL_FILE.read_text(encoding="utf-8")
-    extracted = extract(content)
+def test_why3_comments_are_stripped(extracted_goal):
+    extracted = extracted_goal
 
     assert "(* Why3 goal *)" not in extracted
     assert "(* Why3 assumption *)" not in extracted
     assert "Beware! Only edit allowed sections" not in extracted
 
 
-def test_transitive_dependencies_are_followed():
+def test_transitive_dependencies_are_followed(tmp_path):
     """A definition the theorem reaches only through another must be kept."""
     source = "\n".join(
         [
@@ -143,7 +150,7 @@ def test_transitive_dependencies_are_followed():
         ]
     )
 
-    extracted = extract(source)
+    extracted = extract(source, tmp_path)
 
     assert "Definition is_tiny" in extracted, "the direct dependency is missing"
     assert "Definition is_small" in extracted, "the transitive dependency is missing"
@@ -152,37 +159,7 @@ def test_transitive_dependencies_are_followed():
     assert "From Stdlib Require Import ZArith." in extracted
 
 
-def test_a_file_with_no_theorem_says_so():
-    extracted = extract("Require Import ZArith.\nDefinition d (x:Z) := x.\n")
-
-    assert "current theorem not found" in extracted
-
-
-def test_find_transitive_dependencies_closes_over_the_graph():
-    definitions = {
-        "a": {"lines": ["Definition a := b."], "dependencies": {"b"}},
-        "b": {"lines": ["Definition b := c."], "dependencies": {"c"}},
-        "c": {"lines": ["Definition c := 0."], "dependencies": set()},
-        "unused": {"lines": ["Definition unused := 0."], "dependencies": set()},
-    }
-
-    assert find_transitive_dependencies({"a"}, definitions) == {"a", "b", "c"}
-    assert find_transitive_dependencies({"c"}, definitions) == {"c"}
-    assert find_transitive_dependencies(set(), definitions) == set()
-
-    assert find_transitive_dependencies({"missing"}, definitions) == set()
-
-
-def test_a_cycle_in_the_dependency_graph_terminates():
-    definitions = {
-        "a": {"lines": ["Definition a := b."], "dependencies": {"b"}},
-        "b": {"lines": ["Definition b := a."], "dependencies": {"a"}},
-    }
-
-    assert find_transitive_dependencies({"a"}, definitions) == {"a", "b"}
-
-
-def test_text_fallback_keeps_an_inductive_dependency():
+def test_inductive_dependencies_are_kept(tmp_path):
     source = "\n".join(
         [
             "Inductive addr :=",
@@ -195,7 +172,7 @@ def test_text_fallback_keeps_an_inductive_dependency():
         ]
     )
 
-    extracted = extract(source)
+    extracted = extract(source, tmp_path)
 
     assert "Inductive addr" in extracted
     assert "addr'mk : nat -> addr" in extracted
@@ -217,6 +194,7 @@ def test_coqpyt_context_handles_declaration_forms_and_transitive_dependencies(
             "  match a with addr'mk n => countdown n end.",
             "Definition boxed_value (b : box) : nat := address_value (unbox b).",
             "Definition unused_value : nat := 42.",
+            "Theorem earlier : True. Proof. exact I. Qed.",
             "Theorem wp_goal : forall (b : box), boxed_value b = boxed_value b.",
             "Proof.",
             "Admitted.",
@@ -239,6 +217,7 @@ def test_coqpyt_context_handles_declaration_forms_and_transitive_dependencies(
     assert positions == sorted(positions)
     assert "addr'mk : nat -> addr" in extracted
     assert "Definition unused_value" not in extracted
+    assert "Theorem earlier" not in extracted
     assert "Missing definitions for theorem" not in caplog.text
 
 
@@ -261,76 +240,39 @@ def test_coqpyt_context_deduplicates_an_inductive_and_its_constructor(tmp_path):
     assert extracted.count("addr'mk : nat -> addr") == 1
 
 
-class RecordingLogger:
-    """setup_logger sets propagate=False, so caplog never sees these records."""
-
-    def __init__(self):
-        self.warnings = []
-
-    def warning(self, message, *args):
-        self.warnings.append(message % args if args else message)
-
-    def debug(self, message, *args):
-        pass
-
-    def info(self, message, *args):
-        pass
-
-    error = warning
+@pytest.mark.parametrize("missing", ["proof", "file_context", "file_path"])
+def test_missing_parsed_context_is_an_error(missing):
+    inputs = dict(proof=object(), file_context=object(), file_path="/proof.v")
+    inputs[missing] = None
+    log = Mock()
+    with pytest.raises(ValueError, match=f"{missing} missing"):
+        extract_essential_proof_content(log, "Theorem t : True.", **inputs)
+    log.error.assert_called_once()
 
 
-def test_declaration_pattern_covers_attributes_and_proof_declarations():
-    """The forms the fallback must recognize, and the ones it knowingly skips."""
-    from utils.coq_utils import DECLARATION_PATTERN
+def test_coqpyt_extraction_failure_is_not_hidden(monkeypatch):
+    def fail(*args):
+        raise LookupError("unresolved declaration")
 
-    for source, name in [
-        ("Definition foo := 1.", "foo"),
-        ("Local Definition g := 1.", "g"),
-        # Rocq 9 writes locality as an attribute rather than a keyword.
-        ("#[local] Definition foo := 1.", "foo"),
-        ("#[global] Instance bar : Eq := {}.", "bar"),
-        ("#[export, refine] Instance i : T := {}.", "i"),
-        # A proof may depend on a lemma proved earlier in the same file.
-        ("Theorem helper : True.", "helper"),
-        ("Lemma helper2 : True.", "helper2"),
-        ("Corollary c : True.", "c"),
-        ("Proposition p : True.", "p"),
-        ("Remark r : True.", "r"),
-        ("Fact f : True.", "f"),
-    ]:
-        match = DECLARATION_PATTERN.match(source)
-        assert match is not None, f"{source!r} was not recognized"
-        assert match.group(1) == name, f"{source!r} bound {match.group(1)!r}"
-
-    # Known gaps. The parsed context covers these.
-    for source in [
-        "Program Definition baz := 1.",
-        "Ltac t := auto.",
-        "Let l := 1.",
-        "Notation \"x +++ y\" := (plus x y).",
-    ]:
-        assert DECLARATION_PATTERN.match(source) is None, (
-            f"{source!r} now matches; move it up to the recognized list"
+    monkeypatch.setattr("utils.coq_utils._structured_dependencies", fail)
+    with pytest.raises(RuntimeError, match="unresolved declaration") as error:
+        extract_essential_proof_content(
+            Mock(), "Theorem t : True.", proof=object(),
+            file_context=object(), file_path="/proof.v",
         )
+    assert isinstance(error.value.__cause__, LookupError)
 
 
-def test_the_text_fallback_announces_itself():
-    """Degrading to regex scanning must not be silent."""
-    logger = RecordingLogger()
-    extract_essential_proof_content(
-        logger, "Theorem t : True.\nProof.\nAdmitted.\n"
-    )
-
-    assert len(logger.warnings) == 1
-    warning = logger.warnings[0]
-    assert "falling back to" in warning
-    # Must name what was missing: the caller passes all three as getattr.
-    assert "proof" in warning and "file_context" in warning and "file_path" in warning
+def test_initial_prompt_requires_loaded_coqpyt_context():
+    manager = ContextManager.__new__(ContextManager)
+    manager.coq = Mock(proof=None, proof_file=None, file_path="/proof.v")
+    manager.coq.get_proof_file_content.return_value = "Theorem t : True."
+    manager.logger = Mock()
+    with pytest.raises(ValueError, match="proof, file_context missing"):
+        manager.build_initial_prompt("")
 
 
-def test_the_goal_is_not_emitted_as_its_own_dependency():
-    """The pattern matches Theorem/Lemma, so the goal lands in all_definitions
-    too and can come out twice."""
+def test_the_goal_is_not_emitted_as_its_own_dependency(tmp_path):
     source = "\n".join(
         [
             "From Stdlib Require Import ZArith.",
@@ -341,7 +283,7 @@ def test_the_goal_is_not_emitted_as_its_own_dependency():
         ]
     )
 
-    extracted = extract(source)
+    extracted = extract(source, tmp_path)
 
     assert extracted.count("Theorem wp_goal") == 1
     assert "Definition is_small" in extracted

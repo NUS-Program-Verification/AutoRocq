@@ -1415,7 +1415,6 @@ class CoqInterface:
             # Get CURRENT goals directly from proof_file (not from cached step.goals)
             current_goals = self._get_current_goals_cached()
 
-            # Handle a missing response (None).
             if current_goals is None:
                 self.logger.debug("No current goals available")
                 return []
