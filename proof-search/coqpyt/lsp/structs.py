@@ -684,9 +684,10 @@ class Hyp(object):
 
 
 class Goal(object):
-    def __init__(self, hyps: List[Hyp], ty: str):
+    def __init__(self, hyps: List[Hyp], ty: str, goal_id=None):
         self.hyps = hyps
         self.ty = ty
+        self.goal_id = goal_id
 
     @staticmethod
     def parse(goal: Dict) -> Optional["Goal"]:
@@ -698,7 +699,9 @@ class Goal(object):
                 hyp.pop("def")
         hyps = [Hyp(**hyp) for hyp in goal["hyps"]]
         ty = "" if "ty" not in goal else goal["ty"]
-        return Goal(hyps, ty)
+        evar = (goal.get("info") or {}).get("evar")
+        goal_id = tuple(evar) if isinstance(evar, list) else evar
+        return Goal(hyps, ty, goal_id)
 
     def __repr__(self) -> str:
         hyps = list(map(lambda hyp: repr(hyp), self.hyps))
