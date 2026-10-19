@@ -267,6 +267,30 @@ class CoqInterface:
         self.__cached_goals = current_goals
         self.__goal_cache_filled = True
         return current_goals
+
+    def _open_goal_count(self) -> Optional[int]:
+        """Count focused, background, shelved, and given-up goals.
+
+        Return ``None`` when structured goal state is unavailable.
+        """
+        goal_answer = self._get_current_goals_cached()
+        if goal_answer is None:
+            return None
+
+        goal_config = getattr(goal_answer, 'goals', None)
+        if goal_config is None:
+            return None
+
+        count = len(getattr(goal_config, 'goals', None) or [])
+        for before, after in getattr(goal_config, 'stack', None) or []:
+            count += len(before or []) + len(after or [])
+        count += len(getattr(goal_config, 'shelf', None) or [])
+        count += len(getattr(goal_config, 'given_up', None) or [])
+        return count
+
+    def has_open_goals(self) -> bool:
+        count = self._open_goal_count()
+        return count is not None and count > 0
     
     def get_raw_goal_str(self):
         """Return the string representation of the current goal."""
@@ -598,54 +622,40 @@ class CoqInterface:
         except Exception as e:
             self.logger.error(f"Error printing goals: {e}")
 
+    TERMINATORS = ['qed.', 'qed', 'defined.', 'defined']
+
+    def _current_proof(self):
+        """Return the proof being driven, including after CoqPyt removes it
+        from ``unproven_proofs`` on Qed.
+        """
+        return getattr(self, 'proof', None) or self.get_unproven_proof()
+
+    def _last_step_is_terminator(self, proof) -> bool:
+        if not proof or not proof.steps:
+            return False
+        return proof.steps[-1].text.strip().lower() in self.TERMINATORS
+
     def is_proof_complete(self) -> bool:
-        """Check if the current proof is complete."""
+        """Whether the current proof has no goals or carries a terminator."""
         try:
-            proof = self.get_unproven_proof()
+            proof = self._current_proof()
             if not proof:
-                self.logger.warning("No unproven proof found")
+                self.logger.warning("No proof found")
                 return False
             
             if not proof.steps:
                 return False
             
-            # Check if last step is Qed/Defined
-            last_step_text = proof.steps[-1].text.strip().lower()
-            if last_step_text in ['qed.', 'qed', 'defined.', 'defined']:
-                self.logger.debug(f"Found Qed/Defined step: {last_step_text}")
+            if self._last_step_is_terminator(proof):
+                self.logger.debug("Found Qed/Defined step")
                 return True
             
-            # Get current goals
-            goals = self.get_goal_str()
-            
-            # Check for "Proof finished" specifically
-            if goals and "proof finished" in goals.lower():
-                self.logger.debug("Found 'Proof finished' indicator")
-                return True
-            
-            if goals and "no more goals, but there are some goals you gave up" in goals.lower():
-                self.logger.debug("Found incomplete proof with given up goals")
-                return False
-            
-            # Check various indicators of completion
-            if not goals or goals.strip() in ["", "(no current goal)", "no more goals", "proof completed"]:
+            open_goal_count = self._open_goal_count()
+            if open_goal_count == 0:
                 self.logger.debug("No goals remaining - proof complete")
                 return True
-            
-            # Check if goals string indicates completion
-            goals_lower = goals.lower().strip()
-            completion_indicators = [
-                "proof finished",
-                "no more subgoals",
-                "proof complete",
-                "proof is completed",
-                "no more goals"
-            ]
-            
-            for indicator in completion_indicators:
-                if indicator in goals_lower:
-                    self.logger.debug(f"Found completion indicator: {indicator}")
-                    return True
+            if open_goal_count is not None:
+                return False
             
             # Check the proof file's internal state
             try:
@@ -1246,18 +1256,35 @@ class CoqInterface:
             }
 
     def is_ready_for_qed(self) -> bool:
-        """
-        Check if the proof is ready for Qed by actually trying to apply it.
-        If Qed succeeds, keep it. If Qed fails, pop it back out.
-        """
+        """Whether the proof could be closed now, without changing the file."""
         try:
-            proof = self.get_unproven_proof()
+            proof = self._current_proof()
+            if not proof or not proof.steps:
+                return False
+
+            if self._last_step_is_terminator(proof):
+                return True
+
+            open_goal_count = self._open_goal_count()
+            if open_goal_count is None:
+                self.logger.debug("No structured goal state available")
+                return False
+
+            return open_goal_count == 0
+
+        except Exception as e:
+            self.logger.error(f"Error checking if ready for Qed: {e}")
+            return False
+
+    def apply_qed(self) -> bool:
+        """Append Qed and retain it only if Rocq accepts it."""
+        try:
+            proof = self._current_proof()
             if not proof or not proof.steps:
                 return False
             
             # Check if Qed is already applied
-            last_step_text = proof.steps[-1].text.strip().lower()
-            if last_step_text in ['qed.', 'qed', 'defined.', 'defined']:
+            if self._last_step_is_terminator(proof):
                 self.logger.debug("Qed already applied")
                 return True  # Already has Qed, so it was ready
             
@@ -1267,7 +1294,7 @@ class CoqInterface:
             try:
                 # Try to apply Qed
                 formatted_qed = "\n  Qed."
-                self.proof_file.append_step(self.proof, formatted_qed)
+                self.proof_file.append_step(proof, formatted_qed)
                 
                 # If we get here, Qed was successfully applied
                 self.logger.info("✅ Qed applied successfully - proof is complete! Keeping Qed in file.")
@@ -1275,12 +1302,14 @@ class CoqInterface:
                 
                 return True
             
-            except Exception:
-                
+            except Exception as qed_error:
+                self.last_error = f"Qed refused: {qed_error}"
+                self.logger.info(f"❌ Qed refused: {qed_error}")
+
                 # Make sure we didn't accidentally add a step due to the failed attempt
                 if len(proof.steps) > original_step_count:
                     try:
-                        self.proof_file.pop_step(self.proof)
+                        self.proof_file.pop_step(proof)
                         self.logger.debug("Cleaned up failed Qed attempt")
                     except Exception as cleanup_error:
                         self.logger.warning(f"Error cleaning up failed Qed: {cleanup_error}")
@@ -1289,16 +1318,13 @@ class CoqInterface:
             return False
             
         except Exception as e:
-            self.logger.error(f"Error checking if ready for Qed: {e}")
+            self.logger.error(f"Error applying Qed: {e}")
             return False
 
     def get_proof_completion_status(self) -> dict:
-        """
-        Get comprehensive information about proof completion status.
-        Returns a dictionary with detailed status information.
-        """
+        """Return completion status without changing the proof."""
         try:
-            proof = self.get_unproven_proof()
+            proof = self._current_proof()
             goals = self.get_goal_str()
             
             status = {
@@ -1307,16 +1333,9 @@ class CoqInterface:
                 'current_goals': goals,
                 'is_complete': self.is_proof_complete(),
                 'ready_for_qed': self.is_ready_for_qed(),
-                'qed_already_applied': False
+                'qed_already_applied': self._last_step_is_terminator(proof),
             }
-            
-            if proof and proof.steps:
-                last_step_text = proof.steps[-1].text.strip().lower()
-                status['qed_already_applied'] = last_step_text in ['qed.', 'qed', 'defined.', 'defined']
-            
-            # Qed should have been applied if is_ready_for_qed()
-            assert status['qed_already_applied'] == status['ready_for_qed']
-        
+
             return status
             
         except Exception as e:

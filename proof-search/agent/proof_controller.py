@@ -575,6 +575,10 @@ class ProofController:
                 self._tactics_with_states.append(tactic_with_state)
 
                 post_tactic_status = self.coq.get_proof_completion_status()
+                if post_tactic_status['ready_for_qed'] and not post_tactic_status['qed_already_applied']:
+                    # Rocq may still reject Qed after goals disappear.
+                    if self.coq.apply_qed():
+                        post_tactic_status = self.coq.get_proof_completion_status()
                 proof_complete = post_tactic_status['is_complete'] and post_tactic_status['qed_already_applied']
 
                 self.logger.info(f"✅ Step {self.global_step_id}: TACTIC APPLIED SUCCESSFULLY!")
