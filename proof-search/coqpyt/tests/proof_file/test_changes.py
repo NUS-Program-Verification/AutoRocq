@@ -45,7 +45,7 @@ class TestProofValidFile(SetupProofFile):
             },
             "context": [
                 {
-                    "text": "Notation minus := Nat.sub (only parsing).",
+                    "text": "Abbreviation minus := Nat.sub (only parsing).",
                     "type": "NOTATION",
                 }
             ],
@@ -107,7 +107,7 @@ class TestProofValidFile(SetupProofFile):
             },
             "context": [
                 {
-                    "text": "Notation minus := Nat.sub (only parsing).",
+                    "text": "Abbreviation minus := Nat.sub (only parsing).",
                     "type": "NOTATION",
                 }
             ],

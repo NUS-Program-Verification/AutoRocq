@@ -414,7 +414,7 @@ class CoqLspClient(LspClient):
             Optional[FlecheDocument]: Serialized version of Fleche's document
         """
         result_dict = self.lsp_endpoint.call_method(
-            "coq/getDocument", textDocument=textDocument
+            "coq/getDocument", textDocument=textDocument, ast=True
         )
         return FlecheDocument.parse(result_dict)
 

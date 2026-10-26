@@ -7,7 +7,7 @@
 ---
 
 
-This repository contains the source code of AutoRocq, an agent prover in Rocq (formerly Coq) 9.0.0.
+This repository contains the source code of AutoRocq, an agent prover in Rocq (formerly Coq) 9.2.0.
 
 To discharge a formally stated theorem in Rocq, the agent runs in the following loop:
 
@@ -35,9 +35,9 @@ AutoRocq now supports your favorite model through LiteLLM! See the supported mod
 
 AutoRocq now supports [interactive mode](#interactive-mode), where you can *co-develop* a proof with the agent, monitoring progress and providing hints in real time with the built-in [shell](#repl-commands).
 
-#### Rocq 9.0.0
+#### Rocq 9.2.0
 
-AutoRocq has been migrated to Rocq [9.0.0](https://rocq-prover.org/releases/9.0.0)! Please see past [releases](https://github.com/NUS-Program-Verification/AutoRocq/releases) for compatibility with older versions of Rocq/Coq.
+AutoRocq has been migrated to Rocq [9.2.0](https://rocq-prover.org/releases/9.2.0)! Please see past [releases](https://github.com/NUS-Program-Verification/AutoRocq/releases) for compatibility with older versions of Rocq/Coq.
 
 ---
 
@@ -79,7 +79,10 @@ pip install -r requirement.txt
 
 2. Install dependencies in opam
 
+The repository-local opam overlay supplies the Rocq 9.2-compatible package definitions used by the lockfile.
+
 ```bash
+opam repository add autorocq ./opam-repository
 opam switch import deps.opam
 ```
 

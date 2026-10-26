@@ -27,6 +27,6 @@ RUN apt-get install python2.7 vim -y
 RUN git clone https://github.com/NUS-Program-Verification/AutoRocq.git /autorocq
 
 WORKDIR /autorocq/
-RUN opam update && opam switch import deps.opam -y
+RUN opam repository add autorocq ./opam-repository && opam update && opam switch import deps.opam -y
 ENV PATH="/root/.opam/4.14.0/bin:$PATH"
 RUN pip install -r requirement.txt

@@ -33,7 +33,7 @@ proofs:
             line: 8
             character: 2
         context:
-          - text: "Notation plus := Nat.add (only parsing)."
+          - text: "Abbreviation plus := Nat.add (only parsing)."
             type: NOTATION
       - text: "\n  Print Nat.add."
         goals:

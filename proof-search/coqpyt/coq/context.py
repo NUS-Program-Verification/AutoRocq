@@ -233,7 +233,11 @@ class FileContext:
             return getattr(TermType, expr[1][0].upper())
         if expr[0] == "VernacDefinition":
             return TermType.DEFINITION
-        if expr[0] in ["VernacNotation", "VernacSyntacticDefinition"]:
+        if expr[0] in [
+            "VernacNotation",
+            "VernacSyntacticDefinition",
+            "VernacAbbreviation",
+        ]:
             return TermType.NOTATION
         if expr[0] == "VernacInductive" and expr[1][0] == "Class":
             return TermType.CLASS

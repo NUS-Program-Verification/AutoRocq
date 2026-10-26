@@ -1,0 +1,17 @@
+--- a/src/plugins/wp/ProverWhy3.ml
++++ b/src/plugins/wp/ProverWhy3.ml
+@@ -1249,7 +1249,13 @@ let get_model probes (res:Why3.Call_provers.prover_result) =
+   if Wp_parameters.has_dkey dkey_model && not @@ Probe.Map.is_empty probes then
+     debug_model (res:Why3.Call_provers.prover_result);
+   (* we take the second model because it should be the most precise?? *)
+-  match Why3.Check_ce.select_model_last_non_empty res.pr_models with
++  let rec last_nonempty = function
++    | [] -> None
++    | (_, model) :: models ->
++      if Why3.Model_parser.is_model_empty model then last_nonempty models
++      else Some model
++  in
++  match last_nonempty (List.rev res.pr_models) with
+   | None -> Probe.Map.empty
+   | Some model ->
+     let index = Hashtbl.create 0 in

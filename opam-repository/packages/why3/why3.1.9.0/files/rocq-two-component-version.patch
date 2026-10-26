@@ -1,0 +1,11 @@
+--- a/share/provers-detection-data.conf
++++ b/share/provers-detection-data.conf
+@@ -955,7 +955,7 @@ support_library = "%l/coq/version"
+ exec = "coqtop"
+ version_switch = "-v"
+ version_regexp = "version \\([^ \n]+\\)"
+-version_ok = "^9\.[0-2]\.[0-9]+$"
++version_ok = "^9\.[0-2]\(\.[0-9]+\)?$"
+ version_ok = "^8\.20\.[0-9]+$"
+ version_ok = "^8\.1[6-9]\.[0-9]+$"
+ version_bad = "^8\.1[0-5]\.[0-9]+$"

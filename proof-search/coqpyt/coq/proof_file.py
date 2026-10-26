@@ -632,6 +632,8 @@ class ProofFile(CoqFile):
                 or self._is_complete_definition(expr)
             ):
                 return False
+            if expr[0] == "VernacStartTheoremProof":
+                return True
         except Exception:
             pass
         return self.in_proof

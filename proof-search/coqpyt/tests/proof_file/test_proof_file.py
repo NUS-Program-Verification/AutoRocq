@@ -247,15 +247,15 @@ class TestProofObligation(SetupProofFile):
                 TermType.INDUCTIVE,
                 [],
             ),
-            ("Notation dec := sumbool_of_bool.", TermType.NOTATION, []),
+            ("Abbreviation dec := sumbool_of_bool.", TermType.NOTATION, []),
             (
                 "Fixpoint leb n m : bool := match n, m with | 0, _ => true | _, 0 => false | S n', S m' => leb n' m' end.",
                 TermType.FIXPOINT,
                 [],
             ),
-            ("Notation pred := Nat.pred (only parsing).", TermType.NOTATION, []),
+            ("Abbreviation pred := Nat.pred (only parsing).", TermType.NOTATION, []),
             (
-                'Notation "{ x : A | P }" := (sig (A:=A) (fun x => P)) : type_scope.',
+                'Notation "{ x : A | P }" := (sig (A:=A) (fun x => P%_type)) : type_scope.',
                 TermType.NOTATION,
                 [],
             ),
