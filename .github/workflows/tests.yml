@@ -1,0 +1,80 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  OCAML_VERSION: 4.14.0
+  COQ_VERSION: 9.0.0
+  COQ_LSP_VERSION: 0.2.3+9.0
+  OPAMYES: "1"
+  OPAMROOT: /home/runner/.opam
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirement.txt
+
+      - name: Install system packages
+        run: sudo apt-get update && sudo apt-get install -y opam libgmp-dev pkg-config graphviz
+
+      - name: Restore opam switch
+        id: opam-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.OPAMROOT }}
+          key: opam-${{ runner.os }}-ocaml${{ env.OCAML_VERSION }}-coq${{ env.COQ_VERSION }}-coqlsp${{ env.COQ_LSP_VERSION }}
+
+      - name: Install Rocq and coq-lsp
+        if: steps.opam-cache.outputs.cache-hit != 'true'
+        run: |
+          opam init --bare --disable-sandboxing -n
+          opam switch create "$OCAML_VERSION" "ocaml-base-compiler.$OCAML_VERSION"
+          opam repo add rocq-released https://rocq-prover.org/opam/released --all-switches
+          opam install --switch="$OCAML_VERSION" "coq.$COQ_VERSION" "coq-lsp.$COQ_LSP_VERSION"
+          opam clean --switch="$OCAML_VERSION" --download-cache --logs
+
+      - name: Add opam switch to PATH
+        run: |
+          echo "$OPAMROOT/$OCAML_VERSION/bin" >> "$GITHUB_PATH"
+
+      - name: Check toolchain
+        run: |
+          coqc --version
+          coq-lsp --version
+
+      - name: Build libautorocq
+        working-directory: AutoRocq-bench/libautorocq
+        run: |
+          coq_makefile -f _CoqProject -o CoqMakefile
+          make -f CoqMakefile -j"$(nproc)"
+
+      - name: Install Python dependencies
+        run: pip install -r requirement.txt pyyaml
+
+      - name: Run proof-search tests
+        working-directory: proof-search
+        env:
+          AUTOROCQ_LIBRARY_PATH: ${{ github.workspace }}/AutoRocq-bench/libautorocq
+        run: python -m pytest tests -v
+
+      - name: Run coqpyt tests
+        working-directory: proof-search/coqpyt
+        run: python -m pytest tests -v
