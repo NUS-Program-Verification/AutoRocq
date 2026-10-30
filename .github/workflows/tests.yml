@@ -69,6 +69,14 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r requirement.txt pyyaml
 
+      # CoqPyt pickles parsed libraries here; tests use stable paths so entries
+      # stay valid across runs. Key on everything that shapes the pickles.
+      - name: Restore coqpyt library cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/coqpyt_cache
+          key: coqpyt-${{ runner.os }}-coq${{ env.COQ_VERSION }}-${{ hashFiles('AutoRocq-bench/libautorocq/**/*.v', 'proof-search/coqpyt/coq/**/*.py', 'proof-search/coqpyt/lsp/**/*.py') }}
+
       - name: Run proof-search tests
         working-directory: proof-search
         env:

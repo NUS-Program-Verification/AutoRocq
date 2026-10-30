@@ -50,7 +50,12 @@ def create_proof_file(file_path, **options):
 
 
 def configure_test_library(config):
-    """Use the compiled libautorocq checkout for live tests."""
+    """Use the compiled libautorocq checkout for live tests.
+
+    Every library-backed test shares LIBRARY_WORKSPACE: CoqPyt keys its library
+    disk cache by workspace, so a per-module workspace would re-parse the
+    standard library and libautorocq (minutes each) for every test module.
+    """
     configured_path = os.getenv("AUTOROCQ_LIBRARY_PATH")
     library_path = Path(configured_path) if configured_path else (
         PROJECT_ROOT.parent / "AutoRocq-bench" / "libautorocq"
@@ -61,6 +66,8 @@ def configure_test_library(config):
     if not (library_path / "BuiltIn.vo").is_file():
         pytest.fail(f"libautorocq is not compiled at {library_path}")
     config.coq.library_paths = [{"path": str(library_path), "name": "libframac"}]
+    LIBRARY_WORKSPACE.mkdir(parents=True, exist_ok=True)
+    config.coq.workspace = str(LIBRARY_WORKSPACE)
     return config
 
 
@@ -152,6 +159,9 @@ def get_example_file() -> Path:
 
 
 TEMP_EXAMPLE_ROOT = Path(tempfile.gettempdir()) / "autorocq-test-examples"
+
+# Encloses every temp example copy, so coq-lsp applies its _CoqProject to all of them.
+LIBRARY_WORKSPACE = TEMP_EXAMPLE_ROOT
 
 
 def temp_example_copy(name: str) -> Path:

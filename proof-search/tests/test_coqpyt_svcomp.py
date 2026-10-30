@@ -47,17 +47,18 @@ def open_proof():
     """The goal file with its "Admitted." popped, ready for tactics.
 
     A bare ProofFile does not generate _CoqProject, so this fixture writes the
-    resolved test-library mapping into its private workspace.
+    resolved test-library mapping into the shared library workspace.
     """
     config = configure_test_library(ProofAgentConfig.from_file(str(config_file)))
     coq_file = temp_example_copy("main_loop_invariant_2_established_Coq.v")
     library = config.coq.library_paths[0]
-    (coq_file.parent / "_CoqProject").write_text(
+    workspace = Path(config.coq.workspace)
+    (workspace / "_CoqProject").write_text(
         f"-R {library['path']} {library['name']}\n"
     )
     with create_proof_file(
         str(coq_file),
-        workspace=str(coq_file.parent),
+        workspace=str(workspace),
         timeout=60,
         use_disk_cache=True,
     ) as proof_file:
