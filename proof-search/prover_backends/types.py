@@ -10,6 +10,14 @@ class Goal:
     hypotheses: str = ""
 
 
+@dataclass
+class GoalState:
+    """Ordered active goals, deferred obligations, and abandoned obligations."""
+    goals: list[Goal]
+    shelved: list[Goal]
+    given_up: list[Goal]
+
+
 @dataclass(frozen=True)
 class CompletionStatus:
     ready_to_finalize: bool

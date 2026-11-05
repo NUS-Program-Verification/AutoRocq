@@ -269,11 +269,12 @@ def test_coqpyt_extraction_failure_is_not_hidden(monkeypatch):
     assert isinstance(error.value.__cause__, LookupError)
 
 
-def test_initial_prompt_requires_loaded_coqpyt_context():
+def test_initial_prompt_requires_loaded_coqpyt_context(tmp_path, coq_factory):
     manager = ContextManager.__new__(ContextManager)
-    interface = Mock(proof=None, proof_file=None, file_path="/proof.v")
+    source = tmp_path / "unloaded.v"
+    source.write_text("Theorem t : True.")
+    interface = coq_factory(source, load=False)
     manager.backend = RocqBackend(interface)
-    interface.get_proof_file_content.return_value = "Theorem t : True."
     manager.logger = Mock()
     with pytest.raises(ValueError, match="proof, file_context missing"):
         manager.build_initial_prompt("")

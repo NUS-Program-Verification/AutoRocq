@@ -1,4 +1,4 @@
-"""Test RocqSession.execute_query() results and failure reporting against Rocq."""
+"""Test RocqInterface.execute_query() results and failure reporting against Rocq."""
 
 import sys
 from pathlib import Path
@@ -8,7 +8,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 import pytest
 
-from prover_backends.rocq.session import RocqSession
+from prover_backends.rocq.interface import RocqInterface
 from tests.test_utils import configure_test_library, temp_example_copy, create_coq_interface
 from utils.config import ProofAgentConfig
 from utils.logger import setup_logger
@@ -63,7 +63,7 @@ def get_interface():
         config = ProofAgentConfig.from_file(str(config_file))
         configure_test_library(config)
         coq = create_coq_interface(coq_file, config=config)
-        print("✅ RocqSession loaded")
+        print("✅ RocqInterface loaded")
         _interface = coq
     return _interface
 
@@ -101,7 +101,7 @@ class FakeAuxFile:
 
 
 def bare_interface():
-    coq = object.__new__(RocqSession)
+    coq = object.__new__(RocqInterface)
     coq.logger = setup_logger("test_coq_interface_queries")
     coq.timeout = 0.01
     coq.last_error = None
@@ -216,7 +216,7 @@ TESTS = [
 
 
 if __name__ == "__main__":
-    print("🔬 RocqSession query command tests")
+    print("🔬 RocqInterface query command tests")
     print("=" * 60)
 
     failures = []

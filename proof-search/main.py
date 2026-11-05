@@ -16,7 +16,7 @@ from contextlib import contextmanager
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from prover_backends.rocq.session import RocqSession
+from prover_backends.rocq.interface import RocqInterface
 from prover_backends.rocq.backend import RocqBackend
 from agent.context_manager import ContextManager
 from agent.proof_controller import ProofController
@@ -202,7 +202,7 @@ def initialize_components(args, config: ProofAgentConfig, logger) -> Dict[str, A
                 logger.info(f"   - {lib['name']}: {lib['path']}")
             logger.info(f"🔧 Auto setup CoqProject: {getattr(config.coq, 'auto_setup_coqproject', True)}")
         
-        coq_interface = RocqSession(
+        coq_interface = RocqInterface(
             file_path=args.proof_file,
             workspace=workspace,
             library_paths=library_paths,
@@ -232,7 +232,7 @@ def initialize_components(args, config: ProofAgentConfig, logger) -> Dict[str, A
             logger.debug("🧹 Pre-cleaning proof file to ensure unproven state...")
             clean_success = clean_proof_file(scratch_file, logger)
             if not clean_success:
-                logger.warning("⚠️ Could not clean proof file - will try RocqSession methods later")
+                logger.warning("⚠️ Could not clean proof file - will try RocqInterface methods later")
 
         # Load the file using proper method
         success = coq_interface.load()
@@ -696,15 +696,15 @@ def main():
         logger.info(f"✅ Coq interface loaded: {coq_interface.file_path}")
         
         if not clean_success and not config.interactive.enabled:
-            logger.info("🧹 Attempting RocqSession-based clearing as backup...")
+            logger.info("🧹 Attempting RocqInterface-based clearing as backup...")
             try:
                 proof_status = coq_interface.get_proof_completion_status()
                 if proof_status.get('is_complete', False):
                     success = coq_interface.clear_proof_tactics()
                     if success:
-                        logger.info("✅ RocqSession clearing successful")
+                        logger.info("✅ RocqInterface clearing successful")
                     else:
-                        logger.warning("⚠️ RocqSession clearing failed")
+                        logger.warning("⚠️ RocqInterface clearing failed")
                 else:
                     success = coq_interface.clear_unproven_proof_steps()
                     if success:

@@ -4,8 +4,7 @@ from .types import CompletionStatus, Goal, SearchResult, TacticEffect
 
 
 class ProverBackend(Protocol):
-    """Prover interface used by the proof-search agent.
-    """
+    """Prover policies and operations used by the proof-search agent."""
 
     source_path: str
     file_path: str

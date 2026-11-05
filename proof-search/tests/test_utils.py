@@ -13,7 +13,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 
 def create_coq_interface(file_path, *, config=None, load=True, **options):
     """Preserve caller-supplied paths and options when opening a test session."""
-    from prover_backends.rocq.session import RocqSession
+    from prover_backends.rocq.interface import RocqInterface
 
     if config is not None:
         defaults = {
@@ -25,7 +25,7 @@ def create_coq_interface(file_path, *, config=None, load=True, **options):
         }
         defaults.update(options)
         options = defaults
-    interface = RocqSession(str(file_path), **options)
+    interface = RocqInterface(str(file_path), **options)
     if load:
         try:
             assert interface.load(), interface.get_last_error()
@@ -74,7 +74,7 @@ def configure_test_library(config):
 def reset_coq_file_to_admitted(file_path: Path, backup: bool = True) -> bool:
     """
     Reset a Coq file so its first proof ends with Admitted. instead of Qed.
-    This makes it an "unproven" proof that coqpyt and RocqSession can work with.
+    This makes it an "unproven" proof that coqpyt and RocqInterface can work with.
     
     Args:
         file_path: Path to the .v file

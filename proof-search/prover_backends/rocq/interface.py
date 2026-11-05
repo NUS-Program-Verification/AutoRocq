@@ -3,6 +3,9 @@ import os
 import re
 import signal
 from typing import List, Dict, Any, Optional
+from dataclasses import dataclass
+from prover_backends.types import CompletionStatus, Goal, GoalState
+from prover_backends.rocq.text import extract_essential_proof_content
 from prover_backends.rocq.coqpyt.coq.proof_file import ProofFile
 from prover_backends.rocq.coqpyt.coq.exceptions import InvalidChangeException
 from prover_backends.rocq.coqpyt.coq.structs import TermType
@@ -20,7 +23,13 @@ class RocqSessionDesync(RuntimeError):
     interface/session explicitly instead of taking a hard process exit.
     """
 
-class RocqSession:
+@dataclass(frozen=True)
+class _Checkpoint:
+    owner: object
+    steps: tuple[str, ...]
+
+
+class RocqInterface:
     def __init__(self, file_path: str, workspace: Optional[str] = None, 
                  library_paths: Optional[List[Dict[str, str]]] = None,
                  auto_setup_coqproject: bool = False,
@@ -35,7 +44,8 @@ class RocqSession:
         - coqproject_extra_options: Additional options for _CoqProject
 
         """
-        self.logger = setup_logger("RocqSession")
+        self._identity = object()
+        self.logger = setup_logger("RocqInterface")
 
         if workspace is not None and not os.path.isabs(workspace):
             workspace = os.path.abspath(workspace)
@@ -73,6 +83,103 @@ class RocqSession:
             r'apply.*with.*-?\d{7,}', # apply with very large numbers
         #   r'rewrite.*\*',           # rewrite with wildcard can be expensive
         ]
+
+    def is_loaded(self):
+        return self.proof_file is not None
+
+    def has_active_proof(self):
+        return self.get_unproven_proof() is not None
+
+    def _proof(self):
+        proof = self.proof or self.get_unproven_proof()
+        if proof is None:
+            raise RocqSessionDesync("Cannot inspect Rocq state without an active proof")
+        return proof
+
+    def get_step_count(self):
+        return len(self._proof().steps) - 1
+
+    def _steps(self):
+        proof = self._proof()
+        return proof, tuple(step.text for step in proof.steps)
+
+    def checkpoint(self):
+        return _Checkpoint(self._identity, self._steps()[1])
+
+    def matches_checkpoint(self, checkpoint):
+        return (isinstance(checkpoint, _Checkpoint)
+                and checkpoint.owner is self._identity
+                and self._steps()[1] == checkpoint.steps)
+
+    def restore(self, checkpoint):
+        if not isinstance(checkpoint, _Checkpoint) or checkpoint.owner is not self._identity:
+            raise RocqSessionDesync("Checkpoint belongs to a different Rocq session")
+        proof, steps = self._steps()
+        if steps[:len(checkpoint.steps)] != checkpoint.steps:
+            raise RocqSessionDesync("Checkpoint is no longer an ancestor of the current proof")
+        while len(proof.steps) > len(checkpoint.steps):
+            count = len(proof.steps)
+            self.proof_file.pop_step(proof)
+            if len(proof.steps) != count - 1:
+                raise RocqSessionDesync("Rocq did not remove the expected proof step")
+        self.proof = proof
+        self._invalidate_goal_caches()
+        if not self.matches_checkpoint(checkpoint):
+            raise RocqSessionDesync("Rocq did not restore the requested checkpoint")
+
+    def extract_and_reset_tactics(self):
+        if not self.has_active_proof():
+            return []
+        proof, steps = self._steps()
+        tactics = [step.strip() for step in steps[1:]]
+        self.restore(_Checkpoint(self._identity, steps[:1]))
+        return tactics
+
+    @staticmethod
+    def normalize_goal(goal):
+        return Goal(goal.goal_id, str(goal.ty).strip(), RocqInterface.format_hypotheses(goal))
+
+    def get_goal_state(self):
+        if self._last_step_is_terminator(self._current_proof()):
+            return GoalState([], [], [])
+        answer = self._get_current_goals_cached()
+        if answer is None or answer.goals is None:
+            raise RocqSessionDesync("Rocq goal state is unavailable")
+        return GoalState(
+            [self.normalize_goal(goal) for goal in self.get_subgoals()],
+            [self.normalize_goal(goal) for goal in answer.goals.shelf],
+            [self.normalize_goal(goal) for goal in answer.goals.given_up],
+        )
+
+    def execute(self, command):
+        checkpoint = self.checkpoint()
+        if not self.apply_tactic(command):
+            self.restore(checkpoint)
+            return False
+        try:
+            self.get_goal_state()
+        except Exception:
+            self.restore(checkpoint)
+            raise
+        return True
+
+    def completion_status(self):
+        status = self.get_proof_completion_status()
+        return CompletionStatus(status['ready_for_qed'], status['is_complete'] and status['qed_already_applied'])
+
+    def finalize(self):
+        checkpoint = self.checkpoint()
+        if self.apply_qed():
+            return True
+        self.restore(checkpoint)
+        return False
+
+    def extract_proof_context(self, content):
+        return extract_essential_proof_content(
+            self.logger, content, proof=self.proof,
+            file_context=getattr(self.proof_file, 'context', None),
+            file_path=self.file_path,
+        )
 
     # Add library setup method
     @staticmethod
@@ -994,7 +1101,7 @@ class RocqSession:
             self._invalidate_goal_caches()
             
         except Exception as e:
-            self.logger.warning(f"Error during RocqSession close: {e}")
+            self.logger.warning(f"Error during RocqInterface close: {e}")
             # Don't raise - just log and continue
 
     def close(self):
@@ -1509,7 +1616,7 @@ class RocqSession:
             traceback.print_exc()
             return []
 
-    def restart_coq_server(self):
+    def restart(self):
         """
         Restart the Coq server to clear memory and reset state.
         Preserves the current file path and workspace configuration.

@@ -1,8 +1,8 @@
 """
 The same SV-COMP proof as test_svcomp.py, but one layer down: straight through
-coqpyt's ProofFile, with no RocqSession in the way.
+coqpyt's ProofFile, with no RocqInterface in the way.
 
-What this pins that the RocqSession test does not is that the libframac
+What this pins that the RocqInterface test does not is that the libframac
 realizations resolve from the workspace's _CoqProject alone -- if they do not,
 `wp_goal` never typechecks and coqpyt fails to open a proof at all.
 """

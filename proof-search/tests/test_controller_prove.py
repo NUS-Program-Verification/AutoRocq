@@ -8,7 +8,6 @@ import pytest
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from prover_backends.rocq.session import RocqSession
 from prover_backends.rocq.backend import RocqBackend
 from agent.context_manager import ContextManager
 from agent.proof_controller import ProofController
@@ -61,8 +60,8 @@ def test_prove_theorem():
             pytest.skip("requires an LLM API key")
         print(f"✅ Configuration loaded")
         
-        # Create RocqSession
-        print("🔧 Step 3: Create RocqSession")
+        # Create RocqInterface
+        print("🔧 Step 3: Create RocqInterface")
         coq_interface = create_coq_interface(coq_file, config=config)
         
         try:

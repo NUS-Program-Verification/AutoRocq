@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Callable
 
 from prover_backends.base import ProverBackend
+from prover_backends.interface import ProverInterface
 
 
 @dataclass(frozen=True)
@@ -16,6 +17,7 @@ class BackendCase:
     """
 
     backend: ProverBackend
+    interface: ProverInterface
     source: Path
     introduce: str
     branch: str
@@ -26,6 +28,7 @@ class BackendCase:
     solve_all: str
     rejected: dict[str, str]
     query: str
+    invalid_query: str
     query_identifier: str
     missing_identifier: str
     empty_search: str
@@ -39,6 +42,7 @@ class SharedWitnessCase:
     """Two branches constrain one unresolved witness; solving one updates both."""
 
     backend: ProverBackend
+    interface: ProverInterface
     source: Path
     create_witness: str
     branch: str

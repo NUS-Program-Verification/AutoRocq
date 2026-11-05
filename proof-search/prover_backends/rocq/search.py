@@ -3,7 +3,7 @@ Context Search Module for Proof Agent
 
 ContextSearch is the agent-facing search API: it runs Coq's built-in
 Search/Print/Check/About/Locate/Print Assumptions commands through
-RocqSession.execute_query(), with adaptive result size management.
+ProverInterface.execute_query(), with adaptive result size management.
 """
 
 import re
@@ -12,6 +12,7 @@ from utils.logger import setup_logger
 
 
 from prover_backends.types import SearchResult
+from prover_backends.interface import ProverInterface
 
 
 class ResultReducer:
@@ -300,31 +301,24 @@ class RocqContextSearch:
     point, and the rest name one command each.
     """
     
-    def __init__(self, coq_interface):
-        """
-        Initialize with RocqSession from prover_backends.rocq.session.
-        
-        Args:
-            coq_interface: Instance of RocqSession from prover_backends.rocq.session
-        """
-        self.coq = coq_interface
+    def __init__(self, interface: ProverInterface):
+        self.interface = interface
         self.reducer = ResultReducer()
 
         # Setup logger
         self.logger = setup_logger("ContextSearch")
         
-        # Ensure the RocqSession is loaded
-        if not hasattr(self.coq, 'proof_file') or self.coq.proof_file is None:
+        if not self.interface.is_loaded():
             try:
-                self.coq.load()
-                self.logger.info("✅ RocqSession loaded successfully")
+                self.interface.load()
+                self.logger.info("✅ Prover interface loaded successfully")
             except Exception as e:
-                self.logger.error(f"❌ Failed to load RocqSession: {e}")
+                self.logger.error(f"❌ Failed to load prover interface: {e}")
     
     def _create_search_result(self, content: Optional[str], query: str, query_type: str, goal_context: str = "") -> SearchResult:
         """Create a reduced result and preserve backend failures."""
         if content is None:
-            error = self.coq.get_last_error() or "query failed"
+            error = self.interface.get_last_error() or "query failed"
             self.logger.warning(f"Query failed: {query} -> {error}")
             return SearchResult(
                 content=f"Query failed: {error}",
@@ -360,7 +354,7 @@ class RocqContextSearch:
     def search_lemma(self, lemma_name: str, goal_context: str = "") -> SearchResult:
         """Search for a specific lemma or theorem."""
         query = f"Search {lemma_name}."
-        result = self.coq.execute_query(query)
+        result = self.interface.execute_query(query)
         return self._create_search_result(result, query, 'search_lemma', goal_context)
     
     def search_pattern(self, pattern: str, goal_context: str = "") -> SearchResult:
@@ -370,13 +364,13 @@ class RocqContextSearch:
             pattern = f"({pattern})"
         
         query = f"Search {pattern}."
-        result = self.coq.execute_query(query)
+        result = self.interface.execute_query(query)
         return self._create_search_result(result, query, 'search_pattern', goal_context)
     
     def print_definition(self, identifier: str) -> SearchResult:
         """Print the definition of an identifier."""
         query = f"Print {identifier}."
-        result = self.coq.execute_query(query)
+        result = self.interface.execute_query(query)
         return self._create_search_result(result, query, 'print_definition')
     
     def print_assumptions(self, identifier: str = None) -> SearchResult:
@@ -386,25 +380,25 @@ class RocqContextSearch:
         else:
             query = "Print Assumptions."
         
-        result = self.coq.execute_query(query)
+        result = self.interface.execute_query(query)
         return self._create_search_result(result, query, 'print_assumptions')
     
     def locate_definition(self, identifier: str) -> SearchResult:
         """Locate the definition of an identifier."""
         query = f"Locate {identifier}."
-        result = self.coq.execute_query(query)
+        result = self.interface.execute_query(query)
         return self._create_search_result(result, query, 'locate_definition')
     
     def about_identifier(self, identifier: str) -> SearchResult:
         """Get information about an identifier."""
         query = f"About {identifier}."
-        result = self.coq.execute_query(query)
+        result = self.interface.execute_query(query)
         return self._create_search_result(result, query, 'about_identifier')
     
     def check_term(self, term: str) -> SearchResult:
         """Check the type of a term."""
         query = f"Check {term}."
-        result = self.coq.execute_query(query)
+        result = self.interface.execute_query(query)
         return self._create_search_result(result, query, 'check_term')
     
     def search(self, query: str, goal_context: str = "") -> SearchResult:
@@ -417,7 +411,7 @@ class RocqContextSearch:
         try:
             search_request = query.strip()
 
-            result = self.coq.execute_query(search_request)
+            result = self.interface.execute_query(search_request)
             
             # Determine type from command
             cmd_type = search_request.split()[0].lower() if search_request else 'unknown'

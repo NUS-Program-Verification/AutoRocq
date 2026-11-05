@@ -1,6 +1,6 @@
 import pytest
 
-from prover_backends.rocq.session import RocqSessionDesync
+from prover_backends.rocq.interface import RocqSessionDesync
 from prover_backends.rocq.backend import RocqBackend
 from tests.test_utils import create_coq_interface
 
@@ -85,7 +85,7 @@ class RejectLegacy(importlib.abc.MetaPathFinder):
             raise AssertionError("Top-level CoqPyt import: " + fullname)
 sys.meta_path.insert(0, RejectLegacy())
 from prover_backends.rocq.backend import RocqBackend
-from prover_backends.rocq.session import RocqSession
+from prover_backends.rocq.interface import RocqInterface
 from prover_backends.rocq.coqpyt.coq.proof_file import _AuxFile
 from prover_backends.rocq.coqpyt.coq.structs import Term, TermType
 _AuxFile.get_coqpyt_disk_cache_loc = classmethod(lambda cls: sys.argv[1])

@@ -52,7 +52,7 @@ def clean_proof_file(file_path):
 def proof_file():
     """An open ProofFile on a throwaway copy of example.v.
 
-    use_disk_cache is what RocqSession passes, and it is the difference
+    use_disk_cache is what RocqInterface passes, and it is the difference
     between a 4-second session and a 100-second one.
     """
     file_path = temp_example_copy("example.v")

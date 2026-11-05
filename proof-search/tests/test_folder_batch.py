@@ -89,7 +89,7 @@ def prove_single_file(
     while crash_count < max_crash_retries:
         coq_interface = None
         try:
-            # RocqSession proves on a copy, so the benchmark file is never touched.
+            # RocqInterface proves on a copy, so the benchmark file is never touched.
             coq_interface = create_coq_interface(coq_file, config=config, load=False)
             
             try:

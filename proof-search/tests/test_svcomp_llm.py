@@ -10,7 +10,6 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 import logging
 
-from prover_backends.rocq.session import RocqSession
 from prover_backends.rocq.backend import RocqBackend
 from agent.context_manager import ContextManager
 from agent.proof_controller import ProofController
@@ -22,7 +21,7 @@ coq_file = temp_example_copy("main_loop_invariant_2_established_Coq.v")
 config_file = PROJECT_ROOT / "configs" / "default_config.json"
 
 def print_current_goals(coq_interface):
-    """Print current goals from the RocqSession"""
+    """Print current goals from the RocqInterface"""
     '''
     print("\n🎯 Current Goals:")
     try:
@@ -37,7 +36,7 @@ def print_current_goals(coq_interface):
     pass
 
 def print_steps(coq_interface):
-    """Print proof steps using RocqSession"""
+    """Print proof steps using RocqInterface"""
     print("== Proof Steps ==")
     try:
         if coq_interface.proof and coq_interface.proof.steps:
@@ -126,11 +125,11 @@ def test_llm_proof_generation_with_controller():
             print(f"   - {lib['name']}: {lib['path']}")
         print(f"⚙️ Auto setup CoqProject: {config.coq.auto_setup_coqproject}")
         
-        # Initialize RocqSession using configuration
+        # Initialize RocqInterface using configuration
         coq_interface = create_coq_interface(coq_file, config=config)
         
         try:
-            print("✅ Created RocqSession with auto-configured libraries")
+            print("✅ Created RocqInterface with auto-configured libraries")
             
             # Load the cleaned file
             
@@ -259,7 +258,7 @@ def test_llm_proof_generation_with_controller():
             
             try:
                 is_actually_complete = coq_interface.is_proof_complete()
-                print(f"   - RocqSession reports complete: {is_actually_complete}")
+                print(f"   - RocqInterface reports complete: {is_actually_complete}")
                 is_complete = is_successful or is_actually_complete
             except Exception as e:
                 print(f"   - Error checking completion: {e}")

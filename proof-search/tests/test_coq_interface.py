@@ -1,4 +1,4 @@
-"""RocqSession's core surface, against a real coq-lsp session on examples/example.v."""
+"""RocqInterface's core surface, against a real coq-lsp session on examples/example.v."""
 
 import sys
 from pathlib import Path

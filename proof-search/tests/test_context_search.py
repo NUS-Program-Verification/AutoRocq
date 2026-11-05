@@ -15,12 +15,11 @@ from agent.context_manager import ContextManager
 from agent.context_search import ContextSearch, SearchResult
 from prover_backends.rocq.search import ResultReducer
 from agent.proof_controller import ProofController
-from prover_backends.rocq.session import RocqSession
 from tests.test_utils import configure_test_library, temp_example_copy, create_coq_interface
 from utils.config import ProofAgentConfig
 from utils.logger import setup_logger
 
-# Work on a throwaway copy: RocqSession.load() pops the trailing "Admitted."
+# Work on a throwaway copy: RocqInterface.load() pops the trailing "Admitted."
 # and coqpyt writes that change straight back to the file on disk, which would
 # otherwise leave the tracked example without its proof terminator.
 coq_file = temp_example_copy("main_loop_invariant_2_established_Coq.v")
@@ -91,7 +90,7 @@ def load_config():
 def assert_real_result(query, result):
     """Fail on anything that is not a genuine query hit.
 
-    RocqSession.execute_query() returns None on failure (reason on last_error),
+    RocqInterface.execute_query() returns None on failure (reason on last_error),
     and ContextSearch turns that into content prefixed "Query failed:". Neither
     is a result, and nor is a successful-but-empty "No results found." for the
     queries asserted here.
@@ -111,7 +110,7 @@ def get_interface():
     if _interface is None:
         config = load_config()
         coq = create_coq_interface(coq_file, config=config)
-        print("✅ RocqSession loaded")
+        print("✅ RocqInterface loaded")
         _interface = coq
     return _interface
 
@@ -131,12 +130,14 @@ def _shared_interface():
 
 
 class FakeCoq:
-    """A RocqSession double: the query layer."""
+    """A RocqInterface double: the query layer."""
 
     def __init__(self, result, error=None):
         self.result = result
         self.error = error
-        self.proof_file = object()  # non-None, so ContextSearch skips load()
+
+    def is_loaded(self):
+        return True
 
     def execute_query(self, _query):
         return self.result
@@ -247,7 +248,7 @@ def make_search_output(size):
 
 def test_coq_setup():
     """The fixture file and every configured library have to actually be there."""
-    print("\n🔧 Checking RocqSession Setup...")
+    print("\n🔧 Checking RocqInterface Setup...")
 
     assert coq_file.exists(), f"missing fixture: {coq_file}"
     content = coq_file.read_text()

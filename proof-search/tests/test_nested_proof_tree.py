@@ -1,9 +1,12 @@
+from unittest.mock import Mock
+
+from prover_backends.interface import ProverInterface
 from prover_backends.rocq.backend import RocqBackend
+from prover_backends.rocq.interface import RocqInterface
 from tests.test_utils import create_coq_interface
 from agent.proof_controller import ProofController
 from agent.proof_tree import ProofTree
 from agent.context_manager import ContextManager
-from prover_backends.rocq.session import RocqSession
 from prover_backends.rocq.coqpyt.lsp.structs import Goal, Hyp
 from prover_backends.types import Goal as ProverGoal
 import pytest
@@ -12,7 +15,7 @@ import pytest
 def make_controller(initial_goal):
     controller = ProofController.__new__(ProofController)
     controller.logger = ProofTree().logger
-    controller.backend = RocqBackend(None)
+    controller.backend = RocqBackend(Mock(spec_set=ProverInterface))
     controller.proof_tree = ProofTree()
     controller.global_step_id = 0
     controller.successful_tactics = []
@@ -46,8 +49,8 @@ def update(controller, before, after, tactic):
     before = [identified(goal, goal_id) for goal, goal_id in zip(before, ids)]
     after = [identified(goal, goal_id) for goal, goal_id in zip(after, after_ids)]
     controller._update_proof_tree(
-        [RocqBackend.normalize_goal(goal) for goal in before],
-        [RocqBackend.normalize_goal(goal) for goal in after],
+        [RocqInterface.normalize_goal(goal) for goal in before],
+        [RocqInterface.normalize_goal(goal) for goal in after],
         tactic,
         goal_text(before[0]),
         goal_text(after[0]) if after else "",
@@ -61,7 +64,7 @@ def open_goals(controller):
 
 
 def hypothesis_text(goal):
-    return RocqSession.format_hypotheses(goal)
+    return RocqInterface.format_hypotheses(goal)
 
 
 def assert_frontier_matches_coqpyt(controller, interface):
@@ -104,8 +107,8 @@ def apply_live(controller, tactic):
     controller.global_step_id += 1
     state = controller._handle_successful_tactic(
         tactic,
-        [RocqBackend.normalize_goal(goal) for goal in before],
-        [RocqBackend.normalize_goal(goal) for goal in after],
+        [RocqInterface.normalize_goal(goal) for goal in before],
+        [RocqInterface.normalize_goal(goal) for goal in after],
         goals_before,
         interface.get_goal_str(),
         hypotheses_before,

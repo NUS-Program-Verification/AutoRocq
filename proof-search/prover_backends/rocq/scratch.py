@@ -36,7 +36,7 @@ class ScratchProof:
         """Create the scratch copy and return its path."""
         shutil.copyfile(self.source, self.path)
 
-        # RocqSession regenerates _CoqProject from config on load, which would
+        # RocqInterface regenerates _CoqProject from config on load, which would
         # otherwise leave the source tree modified too.
         self._coqproject_existed = self._coqproject.exists()
         if self._coqproject_existed:

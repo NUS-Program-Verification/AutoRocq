@@ -3,7 +3,7 @@ TacticHistoryManager: recording tactics, the duplicate filter, and the
 save/reload round trip.
 
 Everything here writes under tmp_path, never the agent's own history file.
-The one live-Rocq test records a tactic applied through RocqSession, which is
+The one live-Rocq test records a tactic applied through RocqInterface, which is
 what the agent actually does; the rest are pure unit tests on the manager.
 Retrieval (get_similar_history) has its own file, test_get_similar_history.py.
 """
@@ -18,7 +18,6 @@ PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from agent.history_recorder import TacticHistoryEntry, TacticHistoryManager
-from prover_backends.rocq.session import RocqSession
 from prover_backends.rocq.backend import RocqBackend
 from tests.test_utils import temp_example_copy, create_coq_interface
 

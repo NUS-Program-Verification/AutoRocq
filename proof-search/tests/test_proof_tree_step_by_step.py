@@ -13,7 +13,6 @@ import pytest
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from prover_backends.rocq.session import RocqSession
 from prover_backends.rocq.backend import RocqBackend
 from agent.context_manager import ContextManager
 from agent.proof_tree import ProofTree
@@ -57,11 +56,11 @@ def test_proof_tree_evolution():
     config = configure_test_library(ProofAgentConfig.from_file(str(config_file)))
     print(f"✅ Loaded configuration from {config_file}")
     
-    # Create RocqSession
+    # Create RocqInterface
     coq_interface = create_coq_interface(coq_file, config=config)
     
     try:
-        print("✅ RocqSession loaded")
+        print("✅ RocqInterface loaded")
         
         # Create ContextManager
         context_manager = ContextManager(
@@ -211,7 +210,7 @@ def test_proof_tree_evolution():
         
     finally:
         coq_interface.close()
-        print("\n✅ RocqSession closed")
+        print("\n✅ RocqInterface closed")
 
 
 if __name__ == "__main__":

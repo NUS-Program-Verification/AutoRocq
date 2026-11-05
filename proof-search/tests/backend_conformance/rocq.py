@@ -1,7 +1,7 @@
 import subprocess
 
 from prover_backends.rocq.backend import RocqBackend
-from prover_backends.rocq.session import RocqSession, RocqSessionDesync
+from prover_backends.rocq.interface import RocqInterface, RocqSessionDesync
 from tests.backend_conformance import BackendCase, SharedWitnessCase
 
 
@@ -12,7 +12,8 @@ def create_case(directory, scenario):
     }
     source = directory / "contract.v"
     source.write_text(f"Theorem contract : {statements[scenario]}.\nProof.\nAdmitted.\n")
-    backend = RocqBackend(RocqSession(str(source)))
+    interface = RocqInterface(str(source))
+    backend = RocqBackend(interface)
 
     def verify_export(content):
         # A compiler accepts Admitted, so also check the theorem's assumptions.
@@ -24,11 +25,11 @@ def create_case(directory, scenario):
         assert "Closed under the global context" in result.stdout, result.stdout
 
     if scenario == "shared_witness":
-        return SharedWitnessCase(backend, source, "eexists.", "split.",
+        return SharedWitnessCase(backend, interface, source, "eexists.", "split.",
                                  "reflexivity.", verify_export)
 
     return BackendCase(
-        backend=backend, source=source,
+        backend=backend, interface=interface, source=source,
         introduce="intros P hp.", branch="split.",
         change_hypotheses="pose proof hp as extra.", focus_second="Focus 2.",
         solve_one="assumption.", solve_second="2: assumption.",
@@ -41,7 +42,8 @@ def create_case(directory, scenario):
             "abort": "Abort.",
             "hidden_goal": "shelve.",
         },
-        query="Check and.", query_identifier="and",
+        query="Check and.", invalid_query="Check missing_contract_term.",
+        query_identifier="and",
         missing_identifier="missing_contract_term",
         empty_search='Search "no_contract_lemma_has_this_name_781".',
         empty_result="No results found.",
