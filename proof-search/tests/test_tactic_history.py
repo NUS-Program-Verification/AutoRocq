@@ -3,7 +3,7 @@ TacticHistoryManager: recording tactics, the duplicate filter, and the
 save/reload round trip.
 
 Everything here writes under tmp_path, never the agent's own history file.
-The one live-Rocq test records a tactic applied through CoqInterface, which is
+The one live-Rocq test records a tactic applied through RocqInterface, which is
 what the agent actually does; the rest are pure unit tests on the manager.
 Retrieval (get_similar_history) has its own file, test_get_similar_history.py.
 """
@@ -18,14 +18,14 @@ PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from agent.history_recorder import TacticHistoryEntry, TacticHistoryManager
-from backend.coq_interface import CoqInterface
+from prover_backends.rocq.backend import RocqBackend
 from tests.test_utils import temp_example_copy, create_coq_interface
 
 
 @pytest.fixture
-def manager(tmp_path):
+def manager(tmp_path, history_backend):
     """A manager over an empty history file of this test's own."""
-    return TacticHistoryManager(str(tmp_path / "tactic_history.json"))
+    return TacticHistoryManager(str(tmp_path / "tactic_history.json"), backend=history_backend)
 
 
 def test_a_new_manager_starts_empty(manager):
@@ -34,10 +34,10 @@ def test_a_new_manager_starts_empty(manager):
     assert manager.get_recent_tactics() == []
 
 
-def test_added_tactics_survive_a_save_and_reload(tmp_path):
+def test_added_tactics_survive_a_save_and_reload(tmp_path, history_backend):
     """The round trip through JSON has to preserve every field."""
     history_file = tmp_path / "tactic_history.json"
-    manager = TacticHistoryManager(str(history_file))
+    manager = TacticHistoryManager(str(history_file), backend=history_backend)
 
     manager.add_successful_tactic(
         tactic="intros x y z.",
@@ -57,7 +57,7 @@ def test_added_tactics_survive_a_save_and_reload(tmp_path):
     assert len(on_disk["entries"]) == 1, on_disk
     assert on_disk["metadata"]["total_entries"] == 1
 
-    reloaded = TacticHistoryManager(str(history_file))
+    reloaded = TacticHistoryManager(str(history_file), backend=history_backend)
     assert len(reloaded.entries) == 1, "a fresh manager did not read the file back"
 
     entry = reloaded.entries[0]
@@ -121,9 +121,9 @@ def test_lookups_filter_and_order_the_entries(manager):
     assert set(recent[0]) >= {"tactic", "goals_before", "goals_after", "theorem_name"}
 
 
-def test_clear_history_is_in_memory_until_saved(tmp_path):
+def test_clear_history_is_in_memory_until_saved(tmp_path, history_backend):
     history_file = tmp_path / "tactic_history.json"
-    manager = TacticHistoryManager(str(history_file))
+    manager = TacticHistoryManager(str(history_file), backend=history_backend)
     manager.add_successful_tactic(
         tactic="lia.", goals_before="0 <= n", goals_after="", theorem_name="t"
     )
@@ -137,16 +137,16 @@ def test_clear_history_is_in_memory_until_saved(tmp_path):
 
     manager.save_history()
     assert json.loads(history_file.read_text())["entries"] == []
-    assert TacticHistoryManager(str(history_file)).entries == []
+    assert TacticHistoryManager(str(history_file), backend=history_backend).entries == []
 
 
-def test_a_corrupt_history_file_does_not_take_the_manager_down(tmp_path):
+def test_a_corrupt_history_file_does_not_take_the_manager_down(tmp_path, history_backend):
     history_file = tmp_path / "tactic_history.json"
     # Long enough to get past the "too small, likely truncated" guard, so this
     # exercises the JSON decode failure itself.
     history_file.write_text('{"entries": [ this is not valid json at all')
 
-    manager = TacticHistoryManager(str(history_file))
+    manager = TacticHistoryManager(str(history_file), backend=history_backend)
 
     assert manager.entries == []
 
@@ -177,9 +177,10 @@ def test_entry_dict_round_trip():
 def test_a_tactic_applied_through_coq_is_recorded_with_its_real_states(tmp_path):
     """End to end: the states stored are the ones Rocq actually produced."""
     coq = create_coq_interface(str(temp_example_copy("example.v")))
+    backend = RocqBackend(coq)
 
     try:
-        manager = TacticHistoryManager(str(tmp_path / "tactic_history.json"))
+        manager = TacticHistoryManager(str(tmp_path / "tactic_history.json"), backend=backend)
 
         goals_before = coq.get_goal_str()
         hypotheses_before = coq.get_hypothesis()
@@ -203,7 +204,7 @@ def test_a_tactic_applied_through_coq_is_recorded_with_its_real_states(tmp_path)
     finally:
         coq.close()
 
-    reloaded = TacticHistoryManager(str(tmp_path / "tactic_history.json"))
+    reloaded = TacticHistoryManager(str(tmp_path / "tactic_history.json"), backend=backend)
     assert len(reloaded.entries) == 1
 
     entry = reloaded.entries[0]

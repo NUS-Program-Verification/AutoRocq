@@ -8,7 +8,9 @@ import pytest
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from agent.context_search import ContextSearch, ResultReducer
+from prover_backends.rocq.backend import RocqBackend
+from agent.context_search import ContextSearch
+from prover_backends.rocq.search import ResultReducer
 from tests.test_utils import configure_test_library, temp_example_copy
 from utils.config import ProofAgentConfig
 
@@ -66,7 +68,7 @@ def test_search_dispatches_a_raw_command(coq):
     ContextSearch and CoqCommandSearch are one class, so there is no
     indirection to pin here -- only that the dispatch still reaches Rocq.
     """
-    result = ContextSearch(coq).search("Print bool.")
+    result = ContextSearch(RocqBackend(coq)).search("Print bool.")
 
     assert result.source == "coq_command"
     assert "Inductive bool : Set" in result.content
@@ -75,15 +77,15 @@ def test_search_dispatches_a_raw_command(coq):
 
 def test_execute_coq_query_dispatches_on_the_query_type(coq):
     """The typed entry point the controller uses for its query commands."""
-    context_search = ContextSearch(coq)
+    context_search = ContextSearch(RocqBackend(coq))
 
-    by_identifier = context_search.execute_coq_query(
+    by_identifier = context_search.execute_query(
         "search", identifier="Z.abs", goal_context="0 <= Z.abs x"
     )
     assert by_identifier.result_size > 0, by_identifier.content[:200]
     assert "Z.abs" in by_identifier.content
 
-    by_pattern = context_search.execute_coq_query(
+    by_pattern = context_search.execute_query(
         "search", pattern="(_ <= _)", goal_context="x <= y"
     )
     assert by_pattern.result_size > 0
@@ -91,18 +93,18 @@ def test_execute_coq_query_dispatches_on_the_query_type(coq):
         "a wildcard pattern should match more than one identifier"
     )
 
-    printed = context_search.execute_coq_query("print", identifier="nat")
+    printed = context_search.execute_query("print", identifier="nat")
     assert "Inductive nat : Set" in printed.content
 
     # Missing parameters are reported, not guessed at.
-    missing = context_search.execute_coq_query("search")
+    missing = context_search.execute_query("search")
     assert "requires either identifier or pattern" in missing.content
     assert missing.metadata["error"] == "Missing parameters"
 
 
 def test_a_search_that_matches_nothing_reports_no_results(coq):
     """An empty result must not reach the LLM looking like a hit."""
-    result = ContextSearch(coq).search("Search definitely_not_a_lemma_xyz.")
+    result = ContextSearch(RocqBackend(coq)).search('Search "definitely_not_a_lemma_xyz".')
 
     assert "No results found" in result.content, result.content[:200]
     assert result.metadata.get("error") is None, "an empty result is not a failure"

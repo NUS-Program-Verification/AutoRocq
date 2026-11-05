@@ -16,7 +16,8 @@ from contextlib import contextmanager
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from backend.coq_interface import CoqInterface
+from prover_backends.rocq.interface import RocqInterface
+from prover_backends.rocq.backend import RocqBackend
 from agent.context_manager import ContextManager
 from agent.proof_controller import ProofController
 from agent.interactive_session import InteractiveSessionManager
@@ -201,7 +202,7 @@ def initialize_components(args, config: ProofAgentConfig, logger) -> Dict[str, A
                 logger.info(f"   - {lib['name']}: {lib['path']}")
             logger.info(f"🔧 Auto setup CoqProject: {getattr(config.coq, 'auto_setup_coqproject', True)}")
         
-        coq_interface = CoqInterface(
+        coq_interface = RocqInterface(
             file_path=args.proof_file,
             workspace=workspace,
             library_paths=library_paths,
@@ -231,7 +232,7 @@ def initialize_components(args, config: ProofAgentConfig, logger) -> Dict[str, A
             logger.debug("🧹 Pre-cleaning proof file to ensure unproven state...")
             clean_success = clean_proof_file(scratch_file, logger)
             if not clean_success:
-                logger.warning("⚠️ Could not clean proof file - will try CoqInterface methods later")
+                logger.warning("⚠️ Could not clean proof file - will try RocqInterface methods later")
 
         # Load the file using proper method
         success = coq_interface.load()
@@ -265,8 +266,9 @@ def initialize_components(args, config: ProofAgentConfig, logger) -> Dict[str, A
         
         # Initialize tactic generator with history
         logger.info("Initializing tactic generator...")
+        backend = RocqBackend(coq_interface)
         context_manager = ContextManager(
-            coq_interface=coq_interface,
+            backend=backend,
             model=config.llm.model,
             temperature=config.llm.temperature,
             api_key=getattr(config.llm, 'api_key', None),
@@ -285,13 +287,13 @@ def initialize_components(args, config: ProofAgentConfig, logger) -> Dict[str, A
         # Initialize controller with history
         logger.info("Initializing proof controller...")
         controller = ProofController(
-            coq_interface=coq_interface,
+            backend=backend,
             context_manager=context_manager,
             max_steps=config.coq.max_steps,
             max_errors=config.max_errors,
             enable_recording=config.enable_recording,
             enable_error_feedback=config.enable_error_feedback,
-            enable_hammer=config.enable_hammer,
+            enable_automation=config.enable_hammer,
             max_context_search=config.max_context_search,
             history_file=str(history_file),
             output_dir=config.output_dir,
@@ -694,15 +696,15 @@ def main():
         logger.info(f"✅ Coq interface loaded: {coq_interface.file_path}")
         
         if not clean_success and not config.interactive.enabled:
-            logger.info("🧹 Attempting CoqInterface-based clearing as backup...")
+            logger.info("🧹 Attempting RocqInterface-based clearing as backup...")
             try:
                 proof_status = coq_interface.get_proof_completion_status()
                 if proof_status.get('is_complete', False):
                     success = coq_interface.clear_proof_tactics()
                     if success:
-                        logger.info("✅ CoqInterface clearing successful")
+                        logger.info("✅ RocqInterface clearing successful")
                     else:
-                        logger.warning("⚠️ CoqInterface clearing failed")
+                        logger.warning("⚠️ RocqInterface clearing failed")
                 else:
                     success = coq_interface.clear_unproven_proof_steps()
                     if success:

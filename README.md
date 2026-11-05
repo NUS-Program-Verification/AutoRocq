@@ -60,14 +60,26 @@ proof-search/                      # Directory of proof agent src
 │   ├── history_recorder.py        # Manages proof histories
 │   ├── proof_tree.py              # Manages proof tree
 │   └── interactive_session.py     # Interactive REPL loop
-├── backend/                       # Interface with CoqPyt
-├── coqpyt/                        # Interact with Coq
+├── prover_backends/
+│   ├── base.py                    # Agent-facing backend contract
+│   ├── interface.py               # Prover execution contract
+│   ├── types.py                   # Shared goal and result types
+│   └── rocq/                      # Rocq-specific implementation
+│       ├── backend.py             # Prompts, tactic policies, and search
+│       ├── interface.py           # Native execution, state, and session management
+│       └── coqpyt/                # Vendored Rocq client
 └── utils/                         # Helper functions
 
 scripts/                           # Directory of scripts
 ├── analyze/                       # Analysis scripts of final results
 └── get_results.py                 # Parser of .json results
 ```
+
+The agent uses `ProverBackend` for prover-specific policies. Each backend uses
+`ProverInterface` for execution, queries, normalized goals, and checkpoints.
+For Rocq, `RocqInterface` manages CoqPyt directly and keeps its objects and caches
+behind that boundary. A Lean backend can provide its own interface implementation
+under `prover_backends/lean/` without changing the agent or the Rocq client.
 
 ### Setup Instructions (local)
 

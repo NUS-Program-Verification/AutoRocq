@@ -10,7 +10,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 import logging
 
-from backend.coq_interface import CoqInterface
+from prover_backends.rocq.backend import RocqBackend
 from agent.context_manager import ContextManager
 from agent.proof_controller import ProofController
 from utils.config import ProofAgentConfig
@@ -21,7 +21,7 @@ coq_file = temp_example_copy("main_loop_invariant_2_established_Coq.v")
 config_file = PROJECT_ROOT / "configs" / "default_config.json"
 
 def print_current_goals(coq_interface):
-    """Print current goals from the CoqInterface"""
+    """Print current goals from the RocqInterface"""
     '''
     print("\n🎯 Current Goals:")
     try:
@@ -36,7 +36,7 @@ def print_current_goals(coq_interface):
     pass
 
 def print_steps(coq_interface):
-    """Print proof steps using CoqInterface"""
+    """Print proof steps using RocqInterface"""
     print("== Proof Steps ==")
     try:
         if coq_interface.proof and coq_interface.proof.steps:
@@ -125,11 +125,11 @@ def test_llm_proof_generation_with_controller():
             print(f"   - {lib['name']}: {lib['path']}")
         print(f"⚙️ Auto setup CoqProject: {config.coq.auto_setup_coqproject}")
         
-        # Initialize CoqInterface using configuration
+        # Initialize RocqInterface using configuration
         coq_interface = create_coq_interface(coq_file, config=config)
         
         try:
-            print("✅ Created CoqInterface with auto-configured libraries")
+            print("✅ Created RocqInterface with auto-configured libraries")
             
             # Load the cleaned file
             
@@ -138,7 +138,7 @@ def test_llm_proof_generation_with_controller():
             # Initialize ContextManager
             print("🤖 Initializing LLM ContextManager...")
             context_manager = ContextManager(
-                coq_interface,
+                RocqBackend(coq_interface),
                 api_key=config.llm.api_key,
                 enable_history_context=getattr(config, "enable_history_context", True),
                 enable_context_search=getattr(config, "enable_context_search", True),
@@ -167,7 +167,7 @@ def test_llm_proof_generation_with_controller():
             # Initialize ProofController with updated parameters
             print("🔧 Initializing ProofController with error handling...")
             controller = ProofController(
-                coq_interface=coq_interface,
+                backend=RocqBackend(coq_interface),
                 context_manager=context_manager,
                 max_steps=100,  # Reasonable limit for testing
                 enable_error_feedback=getattr(config, "enable_error_feedback", True),
@@ -258,7 +258,7 @@ def test_llm_proof_generation_with_controller():
             
             try:
                 is_actually_complete = coq_interface.is_proof_complete()
-                print(f"   - CoqInterface reports complete: {is_actually_complete}")
+                print(f"   - RocqInterface reports complete: {is_actually_complete}")
                 is_complete = is_successful or is_actually_complete
             except Exception as e:
                 print(f"   - Error checking completion: {e}")

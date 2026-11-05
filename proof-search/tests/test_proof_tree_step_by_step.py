@@ -13,7 +13,7 @@ import pytest
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from backend.coq_interface import CoqInterface
+from prover_backends.rocq.backend import RocqBackend
 from agent.context_manager import ContextManager
 from agent.proof_tree import ProofTree
 from agent.proof_controller import ProofController
@@ -56,22 +56,22 @@ def test_proof_tree_evolution():
     config = configure_test_library(ProofAgentConfig.from_file(str(config_file)))
     print(f"✅ Loaded configuration from {config_file}")
     
-    # Create CoqInterface
+    # Create RocqInterface
     coq_interface = create_coq_interface(coq_file, config=config)
     
     try:
-        print("✅ CoqInterface loaded")
+        print("✅ RocqInterface loaded")
         
         # Create ContextManager
         context_manager = ContextManager(
-            coq_interface=coq_interface,
+            backend=RocqBackend(coq_interface),
             api_key=config.llm.api_key
         )
         print("✅ ContextManager created")
         
         # Create ProofController - this maintains the proof tree
         controller = ProofController(
-            coq_interface=coq_interface,
+            backend=RocqBackend(coq_interface),
             context_manager=context_manager,
             max_steps=100,
             enable_recording=False,
@@ -102,7 +102,7 @@ def test_proof_tree_evolution():
                 hypotheses_before=initial_hypotheses.strip() if initial_hypotheses else '',
                 hypotheses_after=initial_hypotheses.strip() if initial_hypotheses else '',
                 step_number=0,
-                subgoals_after=coq_interface.get_subgoals()
+                subgoals_after=controller.backend.get_goals()
             )
         
         # Print initial proof tree
@@ -134,7 +134,7 @@ def test_proof_tree_evolution():
             print('=' * 80)
             
             # Get state before for display
-            subgoals_before = coq_interface.get_subgoals()
+            subgoals_before = controller.backend.get_goals()
             goals_before = coq_interface.get_goal_str()
             hypotheses_before = coq_interface.get_hypothesis()
             
@@ -147,7 +147,7 @@ def test_proof_tree_evolution():
             assert success, coq_interface.get_last_error()
             
             # Get state after for display
-            subgoals_after = coq_interface.get_subgoals()
+            subgoals_after = controller.backend.get_goals()
             goals_after = coq_interface.get_goal_str()
             hypotheses_after = coq_interface.get_hypothesis()
             
@@ -210,7 +210,7 @@ def test_proof_tree_evolution():
         
     finally:
         coq_interface.close()
-        print("\n✅ CoqInterface closed")
+        print("\n✅ RocqInterface closed")
 
 
 if __name__ == "__main__":

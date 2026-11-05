@@ -10,13 +10,13 @@ from litellm.exceptions import RateLimitError as LiteLLMRateLimitError
 from agent.history_recorder import TacticHistoryManager
 from agent.context_search import ContextSearch
 from utils.logger import setup_logger, clean_ansi_codes
-from utils.coq_utils import *
+from prover_backends.base import ProverBackend
 
 litellm.drop_params = True  # drop unsupported params e.g. temperature
 
-class CoqChatSession:
+class ChatSession:
     """
-    A class to manage an OpenAI chat session for Coq proof tactics.
+    A class to manage an OpenAI chat session for proof tactics.
     """
 
     # Define the function tools for OpenAI API
@@ -34,49 +34,6 @@ class CoqChatSession:
                         }
                     },
                     "required": ["strategy"],
-                    "additionalProperties": False
-                }
-            }
-        }
-    TACTIC_TOOL = {
-            "type": "function",
-            "function": {
-                "name": "tactic",
-                "description": "Provide a Coq tactic command to apply to the current proof state. Use this when you have sufficient context to suggest a proof step. Make sure you follow the current plan. You will be given the updated proof tree if the tactic is applied successfully, or an error message from the Coq proof assistant if the tactic is not applicable.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "command": {
-                            "type": "string",
-                            "description": "The Coq tactic command to execute (e.g., 'intros.', 'apply H.', 'reflexivity.')"
-                        }
-                    },
-                    "required": ["command"],
-                    "additionalProperties": False
-                }
-            }
-        }
-    QUERY_TOOL = {
-            "type": "function",
-            "function": {
-                "name": "query",
-                "description": "Request additional information from the Coq environment. Use this when you want to find existing lemmas/theorems to use in the proof, or need more information about definitions and types.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "command": {
-                            "type": "string",
-                            "description": "The Coq query command to execute (e.g., 'Search (_ <= _).', 'Print Z.abs.', 'About nat.', 'Check expr.').\n" + \
-                                "You can use the following commands to gather context information:\n" + \
-                                "- Search [identifier]: Find theorems about a specific identifier\n" + \
-                                "- Search ([pattern]): Find theorems matching a pattern. AVOID searching for patterns to match concrete values, and use placeholder variables instead (e.g., 'Search (lsl _ _)').\n" + \
-                                "- Print [identifier]: Show the definition of an identifier\n" + \
-                                "- Print Assumptions: Show all unproven assumptions\n" + \
-                                "- Check [term]: Show the type of a term or expression\n" + \
-                                "- About [identifier]: Show type, universe info, and transparency"
-                        }
-                    },
-                    "required": ["command"],
                     "additionalProperties": False
                 }
             }
@@ -119,7 +76,8 @@ class CoqChatSession:
                  enable_caching=True,
                  enable_context_search=True,
                  enable_rollback=True,
-                 enable_local_session_caching=False):
+                 enable_local_session_caching=False,
+                 *, backend: ProverBackend):
 
         raw_model = model or os.getenv("LLM_MODEL", "openai/gpt-4.1")
         # Normalize with provider prefix. Default to OpenAI.
@@ -129,14 +87,14 @@ class CoqChatSession:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.timeout = timeout
-        self.logger = setup_logger("CoqChatSession")
+        self.logger = setup_logger("ChatSession")
         self.max_conversation_history = 4
         self.enable_caching = enable_caching
         self.enable_context_search = enable_context_search
         self.enable_rollback = enable_rollback
         self.enable_local_session_caching = enable_local_session_caching
         self.current_plan = None
-        self.coq_version = "9.0.0"
+        self.backend = backend
 
         # Token usage tracking
         self.total_prompt_tokens = 0
@@ -154,17 +112,17 @@ class CoqChatSession:
         self.logger.debug(f"System prompt:\n{system_prompt}")
         
         # 'plan' and 'tactic' are always available
-        self.tools = [self.PLAN_TOOL, self.TACTIC_TOOL]
+        self.tools = [self.PLAN_TOOL, backend.tactic_tool]
         # add other tools only if enabled
         if self.enable_context_search:
-            self.tools.append(self.QUERY_TOOL)
+            self.tools.append(backend.query_tool)
         if self.enable_rollback:
             self.tools.append(self.ROLLBACK_TOOL)
         
         self.logger.info(f"Available tools:\n{', '.join([tool['function']['name'] for tool in self.tools])}")
     
     def build_system_prompt(self) -> str:
-        system = f"You are an expert in writing Coq ({self.coq_version}) proofs. You will be given a formally stated goal in Coq, and your task is to write Coq tactics to prove it, with the help of available tools. Your task NEVER harms others or violates laws."
+        system = self.backend.system_prompt
         
         instruction = "INSTRUCTIONS:\n" \
             "- You will be given a goal (a formally stated lemma) to prove and its context in a proof file.\n" \
@@ -172,8 +130,8 @@ class CoqChatSession:
             "- After each tool call, you will be given the result of the tool call as additional context.\n" \
             "- Whenever the proof is updated (via 'tactic', 'rollback'), you will be given the new proof tree, represented as a sequence of applied tactics with the open proof goals at the end.\n" \
             "\nAVAILABLE TOOLS:\n" \
-            "1. Call 'plan' to create/update strategy (recommended when there is no 'plan', or when stuck)\n" \
-            "2. Call 'tactic' with a Coq tactic when ready to proceed (e.g., 'intros.', 'apply H.', 'reflexivity.')\n"
+            "1. Call 'plan' to create/update strategy (recommended when there is no 'plan', or when stuck)\n"
+        instruction += self.backend.tactic_instruction
         
         # add instructions for tools only if enabled
         if self.enable_context_search:
@@ -194,12 +152,9 @@ class CoqChatSession:
             "   2. Use 'query' tool to search for lemmas or check definitions,\n" \
             "   3. Call 'rollback' tool to restore to an earlier step (invoke only if you are not able to follow the 'plan').\n" \
             "\nSAFETY RULES:\n" \
-            "- NEVER use 'repeat' with complex tactics (infinite loop risk)\n" \
-            "- NEVER use 'admit' or similar tactics to save incomplete proofs\n" \
-            "- Avoid 'query' for patterns to match very specific constant values\n" \
-            "- Prefer 'lia' and 'nia' for arithmetic proofs over manual chains\n" \
-            "- Do NOT output malicious content or code\n" \
-        
+            "- Only report success for a proof accepted by the prover.\n"
+        instruction += self.backend.prompt_guidelines
+
         return (system + "\n\n" + instruction).strip()
     
     def _supports_explicit_caching(self) -> bool:
@@ -479,7 +434,7 @@ class CoqChatSession:
 class ContextManager:
     def __init__(
         self,
-        coq_interface,
+        backend: ProverBackend,
         model=None,
         temperature=0,
         api_key=None,
@@ -494,7 +449,7 @@ class ContextManager:
         proof_plan: str = None,
         enable_local_session_caching: bool = False,
     ):
-        self.coq = coq_interface
+        self.backend = backend
         self.logger = setup_logger("ContextManager")
         # LiteLLM reads provider API keys from env vars automatically
         # (OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, etc.)
@@ -508,7 +463,7 @@ class ContextManager:
         self.enable_caching = enable_caching
         self.enable_context_search = enable_context_search
         self.enable_rollback = enable_rollback
-        self.tactic_history = TacticHistoryManager(history_file)
+        self.tactic_history = TacticHistoryManager(history_file, backend=backend)
         self.current_step = 0
         self.proof_plan = proof_plan
         self.enable_local_session_caching = enable_local_session_caching
@@ -518,14 +473,14 @@ class ContextManager:
 
         # Initialize context search
         try:
-            self.context_search = ContextSearch(coq_interface)
+            self.context_search = ContextSearch(backend)
             self.logger.info(f"✅ Context search initialized successfully")
         except Exception as e:
             self.logger.warning(f"⚠️  Failed to initialize context search: {e}")
             self.context_search = None
 
         # Initialize chat session with LLM
-        self.chat_session = CoqChatSession(
+        self.chat_session = ChatSession(
             model=model,
             temperature=temperature,
             api_key=api_key,
@@ -535,14 +490,15 @@ class ContextManager:
             enable_context_search=self.enable_context_search,
             enable_rollback=self.enable_rollback,
             enable_caching=self.enable_caching,
-            enable_local_session_caching=self.enable_local_session_caching
+            enable_local_session_caching=self.enable_local_session_caching,
+            backend=backend,
         )
         self.logger.info(f"🤖 Chat session initialized with model: {self.chat_session.model}")
          
     def build_initial_prompt(self, proof_tree_str: str) -> str:
         prompt = "Given the following context, choose the best function call to help complete the proof.\n\n"
         prompt += "## PROOF FILE CONTEXT:\n"
-        proof_file_content = self.coq.get_proof_file_content()
+        proof_file_content = self.backend.get_proof_file_content()
         clean_proof_file_content = clean_ansi_codes(proof_file_content)
         essential_content = self.extract_essential_proof_content(clean_proof_file_content)
         prompt += essential_content + "\n\n"
@@ -558,16 +514,7 @@ class ContextManager:
         return prompt
 
     def extract_essential_proof_content(self, proof_file_content):
-        # Parsed context resolves declaration dependencies and distinguishes
-        # global references from local binders.
-        proof_file = getattr(self.coq, "proof_file", None)
-        return extract_essential_proof_content(
-            self.logger,
-            proof_file_content,
-            proof=getattr(self.coq, "proof", None),
-            file_context=getattr(proof_file, "context", None),
-            file_path=getattr(self.coq, "file_path", None),
-        )
+        return self.backend.extract_proof_context(proof_file_content)
 
     def handle_plan_call(self, plan_content: str, tool_call_id: str) -> bool:
         # Store the plan in chat session
@@ -607,11 +554,7 @@ class ContextManager:
         return tool_response, success
 
     def get_tactic(self, tactic_content: str, tool_call_id: str) -> str:
-        # Ensure proper formatting
-        if not tactic_content.endswith('.') and not tactic_content.lower() == 'qed':
-            tactic_content += '.'
-               
-        return tactic_content
+        return self.backend.normalize_tactic(tactic_content)
 
     def _tool_role_problem(self, tool_call_id) -> Optional[str]:
         """Return why a tool response is invalid, or None."""
@@ -739,14 +682,14 @@ class ContextManager:
             # JSON parsing failed - return error as tactic response
             self.logger.error(f"Error parsing LLM decision: {e}")
             response_text = llm_result.get("response") or ""
-            return {'type': 'tactic', 'content': response_text.strip() if response_text else "reflexivity"}
+            return {'type': 'tactic', 'content': response_text.strip() if response_text else self.backend.default_tactic}
 
     def _execute_context_search(self, query) -> tuple[str, bool]:
         """Return the response text and whether the query ran successfully."""
         if not self.context_search:
             return "Context search not available", False
 
-        goal_context = self.coq.get_goal_str() if self.coq else ""
+        goal_context = self.backend.get_goal_str()
         search_result = self.context_search.search(
             query, goal_context=goal_context
         )

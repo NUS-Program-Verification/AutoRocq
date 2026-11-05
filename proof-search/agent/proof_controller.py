@@ -1,16 +1,15 @@
 import copy
 import os
-import re
 
 from pathlib import Path
 from typing import Dict, Optional, Any, List
-from backend.coq_interface import CoqInterface
+from prover_backends.base import ProverBackend
 from agent.context_manager import ContextManager
 from agent.proof_tree import ProofTree
 from agent import visualizer
 from utils.recorder import create_proof_recorder
 from utils.logger import clean_ansi_codes, setup_logger
-from utils.coq_utils import hints_from_error, goal_diff
+from utils.text_utils import goal_diff
 from utils.config import InteractiveConfig
 
 class ProofController:
@@ -21,13 +20,13 @@ class ProofController:
     
     def __init__(
         self,
-        coq_interface: CoqInterface,
+        backend: ProverBackend,
         context_manager: ContextManager,
         max_steps: int = 50,
         max_errors: int = 3,
         enable_recording: bool = True,
         enable_error_feedback: bool = True,
-        enable_hammer: bool = False,
+        enable_automation: bool = False,
         max_context_search: int = 3,
         history_file: str = "tactic_history.json",
         recording_output_dir: str = "data/statistics",
@@ -43,14 +42,14 @@ class ProofController:
 
         self.max_context_search = max_context_search
         self.enable_error_feedback = enable_error_feedback
-        self.enable_hammer = enable_hammer
+        self.enable_automation = enable_automation
         
-        self.coq = coq_interface
+        self.backend = backend
         self.context_manager = context_manager
-        self.coq_chat_session = context_manager.chat_session
+        self.chat_session = context_manager.chat_session
 
         # The run's output directory: where the proof tree is saved, beside the
-        # log and the resulting .v. None when the caller has no run directory,
+        # log and the resulting proof file. None when the caller has no run directory,
         # in which case the tree falls back to the proof file's own directory.
         self.output_dir = output_dir
         
@@ -127,7 +126,7 @@ class ProofController:
                 # Ensure the directory exists
                 os.makedirs(os.path.dirname(history_path), exist_ok=True)
                 
-                self.tactic_history = TacticHistoryManager(history_path)
+                self.tactic_history = TacticHistoryManager(history_path, backend=self.backend)
                 self.logger.info(f"✅ Created new TacticHistoryManager: {history_path}")
                 
                 # Share it back to context_manager to avoid duplication
@@ -166,22 +165,22 @@ class ProofController:
             # Clean up large states first
             self._cleanup_large_states()
             
-            if self.coq.restart_coq_server():
+            if self.backend.restart():
                 self.steps_since_restart = 0
                 # Reload current state
                 self._reload_current_proof_state()
             else:
-                self.logger.error("❌ Failed to restart Coq server")
+                self.logger.error("❌ Failed to restart prover server")
     
     def _cleanup_large_states(self):
         """Clean up large proof states that might cause memory issues."""
         try:
             # Clear chat history if it gets too long
-            if self.coq_chat_session:
-                if hasattr(self.coq_chat_session, 'messages'):
-                    messages = self.coq_chat_session.messages
+            if self.chat_session:
+                if hasattr(self.chat_session, 'messages'):
+                    messages = self.chat_session.messages
                     if len(messages) > 20:  # Keep only last 20 messages
-                        self.coq_chat_session.messages = messages[-20:]
+                        self.chat_session.messages = messages[-20:]
                         self.logger.info("🧹 Cleaned up chat session history")
                 
             # Clear query command history
@@ -196,10 +195,10 @@ class ProofController:
         """Reload the current proof state after server restart."""
         try:
             # Store current file path if not already stored
-            file_path = self.coq.proof_file.path
+            file_path = self.backend.file_path
             self.logger.info(f"🔄 Reloading proof file: {file_path}")
             
-            success = self.coq.load()
+            success = self.backend.load()
             if success:
                 self.logger.info("✅ Proof file reloaded successfully")
                 
@@ -229,14 +228,10 @@ class ProofController:
         # Start recording
         if self.enable_recording and self.recorder:
             try:
-                proof_file = self.coq.proof_file
-                if proof_file is None:
-                    raise ValueError("No proof file available")
                 self.recorder.start_proof_recording(
-                    proof_file=proof_file,
+                    proof_file_path=self.backend.source_path,
                     theorem_name=self.current_theorem_name,
                     metadata={'max_steps': self.max_steps, 'controller_version': '1.0'},
-                    proof_file_path=self.coq.source_path
                 )
             except Exception as e:
                 self.logger.error(f"❌ Failed to start proof recording: {e}")
@@ -253,11 +248,12 @@ class ProofController:
         self._tactics_with_states = []
 
         # Check for unproven proof
-        unproven_proof = self.coq.get_unproven_proof()
-        if not unproven_proof:
+        has_proof = self.backend.has_active_proof()
+        if not has_proof:
             self.logger.error("❌ No unproven proof available")
             return False
 
+        self._initial_checkpoint = self.backend.checkpoint()
         self._init_proof_tree()
         self.logger.info("🌳 Initialized new ProofTree")
 
@@ -271,7 +267,7 @@ class ProofController:
         Finalize a proof attempt: record history, save tree, end recording.
         Called by prove_theorem() and InteractiveSessionManager.
         """
-        tree_dir = Path(self.output_dir) if self.output_dir else Path(self.coq.file_path).parent
+        tree_dir = Path(self.output_dir) if self.output_dir else Path(self.backend.file_path).parent
         tree_dir.mkdir(parents=True, exist_ok=True)
         prefix = self.current_theorem_name + "_"
 
@@ -381,13 +377,8 @@ class ProofController:
 
             proof_state = self._build_proof_state()
 
-            current_step_count = len(self._tactics_with_states)
-            current_step_count_coq = len(self.coq.proof.steps) if self.coq.proof.steps else 0
-            expected_coq_steps = current_step_count + 1  # +1 for Proof.
-            self.logger.debug(f"Step count: total={current_step_count}, coq_file={current_step_count_coq}")
-            if expected_coq_steps != current_step_count_coq:
-                self.logger.error(f"Error: Step count mismatch! expected={expected_coq_steps} != coq={current_step_count_coq}. Exiting early...")
-                exit(1)
+            if self.backend.get_step_count() != len(self._tactics_with_states):
+                raise RuntimeError("Backend step count differs from the accepted proof history")
 
             decision, tool_call_id = self.context_manager.get_action(prompt, role=role, tool_call_id=tool_call_id, should_optimize=should_optimize)
 
@@ -478,7 +469,7 @@ class ProofController:
                 self.gen_step_count += 1
                 tactic_content = self.context_manager.get_tactic(decision_content, tool_call_id)
 
-                if tactic_content.startswith(("Search", "Print", "Check", "About")):
+                if self.backend.classify_command(tactic_content) == "query":
                     prompt = f"You have supplied a 'query' as a 'tactic'. Please call the 'query' tool instead.\n"
                     query_response = self._run_query(decision_content, tool_call_id)
                     prompt += query_response
@@ -489,18 +480,18 @@ class ProofController:
                     continue
 
                 # Early abort: give up
-                if tactic_content in ["Abort.", "abort.", ]:
+                if self.backend.classify_command(tactic_content) == "abort":
                     self.logger.warning(f"⚠️  Step {self.global_step_id}: ABORTING PROOF -- giving up!")
                     self.give_up = True
                     break
 
-                if tactic_content in ["Admitted.", "admit."]:
+                if self.backend.classify_command(tactic_content) == "admission":
                     prompt = "Tactic not allowed. Suggest a *different* tactic.\n"
                     prompt += "If some errors persist, you may consider (1) reviewing your plan, (2) searching/querying for relevant terms, or (3) rolling back to an earlier state."
-                    self.logger.info(f"⚠️  Step {self.global_step_id}: ADMITTED TACTIC -- skipped!")
+                    self.logger.info(f"⚠️  Step {self.global_step_id}: UNPROVEN ADMISSION -- skipped!")
                     consecutive_errors += 1
                     yield {'type': 'tactic', 'tactic': tactic_content, 'success': False,
-                           'error': 'Admitted not allowed', 'goals_after': '', 'proof_complete': False}
+                           'error': 'Unproven admission not allowed', 'goals_after': '', 'proof_complete': False}
                     continue
 
                 if tactic_content in error_tactics:
@@ -512,7 +503,7 @@ class ProofController:
                            'error': 'Repeated failed tactic', 'goals_after': '', 'proof_complete': False}
                     continue
 
-                subgoals_before = self.coq.get_subgoals()
+                subgoals_before = self.backend.get_goals()
                 goals_before = proof_state.get('goals', '').strip()
                 hypotheses_before = proof_state.get('hypotheses', '').strip()
 
@@ -525,15 +516,18 @@ class ProofController:
                     consecutive_errors += 1
                     error_tactics.append(tactic_content)
                     self.failed_tactics.append(tactic_content)
-                    failed_error = self.coq.get_last_error()
+                    failed_error = self.get_last_error()
                     self.logger.info(f"⚠️  Step {self.global_step_id}: TACTIC APPLICATION failed")
 
-                    if consecutive_errors == self.max_errors + 1 and self.enable_hammer:
-                        success = self._try_hammer()
+                    if consecutive_errors == self.max_errors + 1 and self.enable_automation:
+                        success = self._try_automation()
+                        if success:
+                            # Record the automation command that actually succeeded.
+                            tactic_content = self.backend.automation_tactic
 
                     if not success:
                         prompt += f"Tactic application failed with error: {failed_error}\n"
-                        prompt += hints_from_error(tactic_content, failed_error)
+                        prompt += self.backend.error_hint(tactic_content, failed_error)
                         if consecutive_errors > self.max_errors:
                             prompt += "\nIf errors persist, you may consider using other available tools."
                         prompt += self._provide_history_feedback(consecutive_errors)
@@ -541,16 +535,16 @@ class ProofController:
                                'error': failed_error, 'goals_after': goals_before, 'proof_complete': False}
                         continue
                     else:
-                        prompt += "Application failed with supplied tactic, but hammer succeeded.\n"
+                        prompt += "Application failed with supplied tactic, but backend automation succeeded.\n"
 
                 # Tactic succeeded
                 should_optimize = True
                 _clear_error_tracking()
                 self.logger.info(f"🏆 Tactic applied: '{tactic_content}'")
 
-                current_goals_after = self.coq.get_goal_str()
-                current_hypotheses_after = self.coq.get_hypothesis()
-                subgoals_after = self.coq.get_subgoals()
+                current_goals_after = self.backend.get_goal_str()
+                current_hypotheses_after = self.backend.get_hypothesis()
+                subgoals_after = self.backend.get_goals()
 
                 tactic_with_state = self._handle_successful_tactic(
                     tactic_content, subgoals_before, subgoals_after,
@@ -560,7 +554,7 @@ class ProofController:
                     consecutive_errors += 1
                     error_tactics.append(tactic_content)
                     self.failed_tactics.append(tactic_content)
-                    failed_error = self.coq.get_last_error()
+                    failed_error = self.get_last_error()
                     prompt = f"Tactic application rejected: {failed_error}\n"
                     yield {
                         'type': 'tactic',
@@ -574,12 +568,7 @@ class ProofController:
                 tactic_with_state['source'] = 'agent'
                 self._tactics_with_states.append(tactic_with_state)
 
-                post_tactic_status = self.coq.get_proof_completion_status()
-                if post_tactic_status['ready_for_qed'] and not post_tactic_status['qed_already_applied']:
-                    # Rocq may still reject Qed after goals disappear.
-                    if self.coq.apply_qed():
-                        post_tactic_status = self.coq.get_proof_completion_status()
-                proof_complete = post_tactic_status['is_complete'] and post_tactic_status['qed_already_applied']
+                proof_complete = self._finalize_if_ready()
 
                 self.logger.info(f"✅ Step {self.global_step_id}: TACTIC APPLIED SUCCESSFULLY!")
 
@@ -625,19 +614,19 @@ class ProofController:
     ############################
 
     def _init_proof_tree(self):
-        """Initialize a fresh proof tree with a root node from current Coq state."""
+        """Initialize a fresh proof tree with a root node from current prover state."""
         self.proof_tree = ProofTree()
-        initial_goals = self.coq.get_goal_str()
+        initial_goals = self.backend.get_goal_str()
         self.logger.info(f"🎯 Initial goals: {initial_goals}")
-        initial_hypotheses = self.coq.get_hypothesis()
+        initial_hypotheses = self.backend.get_hypothesis()
         self.proof_tree.add_node(
-            tactic="Proof.",
+            tactic=self.backend.proof_start_label,
             goals_before=initial_goals.strip() if initial_goals else '',
             goals_after=initial_goals.strip() if initial_goals else '',
             hypotheses_before=initial_hypotheses.strip() if initial_hypotheses else '',
             hypotheses_after=initial_hypotheses.strip() if initial_hypotheses else '',
             step_number=0,
-            subgoals_after=self.coq.get_subgoals()
+            subgoals_after=self.backend.get_goals()
         )
 
     #####################
@@ -663,8 +652,8 @@ class ProofController:
 
     def _handle_successful_tactic(self, successful_tactic, subgoals_before, subgoals_after, goals_before, goals_after, hypotheses_before, hypotheses_after) -> Dict[str, Any]:
         """
-        Handle successful tactic by updating proof tree. 
-        Returns all the information about the tactic application as a dictionary.
+        Commit a transition after _apply_tactic has captured its checkpoint.
+        An unrepresentable transition restores both backend state and the tree.
         """
         tree_snapshot = copy.deepcopy((
             self.proof_tree.root,
@@ -675,6 +664,7 @@ class ProofController:
         try:
             # Update proof tree
             tactic_with_state = self._update_proof_tree(subgoals_before, subgoals_after, successful_tactic, goals_before, goals_after, hypotheses_before, hypotheses_after)
+            tactic_with_state['checkpoint'] = self.backend.checkpoint()
             self.successful_tactics.append(successful_tactic)
             # Update in recorder
             if self.enable_recording and self.recorder:
@@ -695,13 +685,11 @@ class ProofController:
                 self.proof_tree.active_node,
                 self.proof_tree.live_goals,
             ) = tree_snapshot
-            proof = getattr(self.coq, 'proof', None) if hasattr(self, 'coq') else None
-            if proof is not None and proof.steps:
-                self._restore_coq_step_count(len(proof.steps) - 1)
-                self.coq.last_error = (
-                    "Tactic was reverted because its goal transition could not "
-                    f"be represented safely: {e}"
-                )
+            self.backend.restore(self._pending_checkpoint)
+            self._last_error = (
+                "Tactic was reverted because its goal transition could not "
+                f"be represented safely: {e}"
+            )
             return False
 
     def _update_proof_tree(self, subgoals_before, subgoals_after, successful_tactic, goals_before, goals_after, hypotheses_before, hypotheses_after) -> Dict[str, Any]:
@@ -714,22 +702,12 @@ class ProofController:
                 self.logger.warning(
                     f"⚠️  No open subgoals to attach tactic [{successful_tactic}] to. Skipping node addition."
                 )
-            elif (
-                re.match(
-                    r"^\s*(?:cycle\b|focus\s+\d+\b|unfocus\b)",
-                    successful_tactic,
-                    re.IGNORECASE,
-                )
-                or re.fullmatch(
-                    r"\s*(?:\d+\s*:\s*)?[{}]\s*\.?\s*",
-                    successful_tactic,
-                )
-            ):
+            elif self.backend.tactic_effect(successful_tactic).kind == "focus":
                 self.proof_tree.reorder_open_subgoals(subgoals_after)
-            elif re.match(r"^\s*all\s*:", successful_tactic, re.IGNORECASE):
+            elif self.backend.tactic_effect(successful_tactic).kind == "all":
                 if subgoals_after:
                     raise ValueError(
-                        "all: is only proof-tree-safe when it closes every open goal"
+                        "A command targeting all goals must close every open goal"
                     )
                 for target_index in reversed(range(len(self.proof_tree.open_subgoals))):
                     self.proof_tree.attach_to_correct_subgoal(
@@ -745,8 +723,7 @@ class ProofController:
                         replacement_subgoals=[],
                     )
             else:
-                selector = re.match(r"^\s*(\d+)\s*:", successful_tactic)
-                target_index = int(selector.group(1)) - 1 if selector else 0
+                target_index = self.backend.tactic_effect(successful_tactic).target_index
                 if not 0 <= target_index < len(subgoals_before):
                     raise ValueError(f"Invalid goal selector index {target_index + 1}")
 
@@ -754,7 +731,7 @@ class ProofController:
                 after_ids = self.proof_tree.goal_ids(subgoals_after)
                 after_id_set = set(after_ids)
                 if before_ids != [node.goal_id for node in self.proof_tree.open_subgoals]:
-                    raise ValueError("Rocq and tree frontier IDs differ before the tactic")
+                    raise ValueError("Backend and tree frontier IDs differ before the tactic")
                 unselected_ids = set(before_ids) - {before_ids[target_index]}
                 replacement_subgoals = [
                     goal for goal in subgoals_after if goal.goal_id not in unselected_ids
@@ -813,71 +790,34 @@ class ProofController:
     def _build_proof_state(self) -> Dict[str, Any]:
         """Build current proof state for tactic generation."""
         return {
-            "goals": self.coq.get_goal_str(),
-            "hypotheses": self.coq.get_hypothesis(),
+            "goals": self.backend.get_goal_str(),
+            "hypotheses": self.backend.get_hypothesis(),
             "step_number": self.global_step_id,
             "successful_tactics": self.successful_tactics[-5:],  # Last 5 successful tactics
             "failed_tactics": self.failed_tactics[-3:],  # Last 3 failed tactics
         }
 
     def _apply_tactic(self, tactic: str) -> bool:
-        """Apply a single tactic to the current proof state."""
-        if re.match(r"^\s*abort\b", tactic, re.IGNORECASE):
-            self.coq.last_error = "Abort is not a proof step and cannot enter the proof tree"
+        self._last_error = None
+        self._pending_checkpoint = self.backend.checkpoint()
+        return self.backend.apply_tactic(tactic)
+
+    def _try_automation(self) -> bool:
+        automation = self.backend.automation_tactic
+        if not automation:
             return False
-        if re.search(
-            r"(?:^|[;.])\s*(?:shelve|shelve_unifiable|unshelve|give_up)\b",
-            tactic,
-            re.IGNORECASE,
-        ):
-            self.coq.last_error = (
-                "Tactics that hide or restore shelved goals are not supported "
-                "by proof-tree tracking"
-            )
-            return False
+        return self._apply_tactic(automation)
 
-        all_selector = re.match(r"^\s*all\s*:", tactic, re.IGNORECASE)
-        proof = getattr(self.coq, 'proof', None)
-        step_count = len(proof.steps) if proof is not None else 0
-        before_ids = set(self.proof_tree.goal_ids(self.coq.get_subgoals()))
-        success = self.coq.apply_tactic(tactic)
-        if not success:
-            return False
-        answer = self.coq._get_current_goals_cached()
-        config = answer.goals if answer is not None else None
-        hidden = (config.shelf + config.given_up) if config is not None else []
-        if before_ids.intersection(self.proof_tree.goal_ids(hidden)):
-            self._restore_coq_step_count(step_count)
-            self.coq.last_error = "Tactic was reverted because a tracked goal was shelved or given up"
-            return False
-        if not all_selector:
-            return success
+    def get_last_error(self) -> str:
+        return getattr(self, '_last_error', None) or self.backend.get_last_error()
 
-        if not self.coq.get_subgoals():
-            return True
+    def _finalize_if_ready(self) -> bool:
+        status = self.backend.completion_status()
+        if status.ready_to_finalize and not status.finalized:
+            if self.backend.finalize():
+                status = self.backend.completion_status()
+        return status.finalized
 
-        self._restore_coq_step_count(step_count)
-        self.coq.last_error = (
-            "The 'all:' tactical was reverted because it did not close every "
-            "open goal"
-        )
-        return False
-
-    def _restore_coq_step_count(self, target_count: int) -> None:
-        """Pop accepted steps until Rocq returns to ``target_count``."""
-        proof = getattr(self.coq, 'proof', None) or self.coq.get_unproven_proof()
-        if proof is None:
-            raise RuntimeError("Cannot restore Rocq state without an active proof")
-
-        while len(proof.steps) > target_count:
-            self.coq.proof_file.pop_step(proof)
-        if len(proof.steps) != target_count:
-            raise RuntimeError(
-                f"Could not restore Rocq to {target_count} proof steps"
-            )
-        self.coq.proof = proof
-        self.coq._invalidate_goal_caches()
-   
     def _execute_rollback(self, successful_tactics_with_states: List[Dict], reason: str, proof_tree_str: str, rb_steps: int) -> Dict[str, Any]:
         """
         Execute rollback using the number of steps to rollback.
@@ -942,6 +882,10 @@ class ProofController:
             
             reasoning = f'Rollback by {rb_steps} step{"s" if rb_steps != 1 else ""}'
             
+            checkpoint = (successful_tactics_with_states[target_index - 1]['checkpoint']
+                          if target_index else self._initial_checkpoint)
+            self.backend.restore(checkpoint)
+
             # Step 2: Update proof tree - delete subtree beyond target step_number
             if self.proof_tree:
                 self.logger.debug(f"🌳 Proof tree BEFORE rollback:")
@@ -959,39 +903,9 @@ class ProofController:
                 proof_tree_str_after = self.proof_tree.get_proof_tree_string()
                 self.logger.debug(f"\n{proof_tree_str_after[:200]}...\n")
             
-            # Step 4: Rollback Coq proof state by popping steps
-            if rollback_distance > 0:
-                self.logger.info(f"🔙 Popping {rollback_distance} proof steps from Coq")
-                
-                # Get the current unproven proof from CoqInterface
-                proof = self.coq.get_unproven_proof()
-                if proof:
-                    try:
-                        for i in range(rollback_distance):
-                            steps_before = len(proof.steps)
-                            self.logger.debug(f"Step to pop: {proof.steps[-1].step}")
-                            self.coq.proof_file.pop_step(proof)
-                            steps_after = len(proof.steps)
-                            if steps_before != steps_after + 1:
-                                raise Exception(f"Error: Step count mismatch after pop_step(). Steps before: {steps_before}, Steps after: {steps_after}")
-                    except Exception as pop_error:
-                        self.logger.error(f"{pop_error}. Exiting early...")
-                        exit(1) # Fail fast
-                
-                # Step 4b: Refresh CoqInterface's cached proof object
-                # Get a fresh proof object that reflects the current file state
-                self.coq.proof = self.coq.get_unproven_proof()
-                self.coq._invalidate_goal_caches()
-                if self.coq.proof:
-                    self.logger.debug(f"🔄 Refreshed proof object: now has {len(self.coq.proof.steps)} steps")
-                else:
-                    self.logger.warning(f"⚠️ No proof object after rollback refresh")
+            if self.proof_tree:
+                self.proof_tree.reorder_open_subgoals(self.backend.get_goals())
 
-                if self.proof_tree:
-                    self.proof_tree.reorder_open_subgoals(
-                        self.coq.get_subgoals()
-                    )
-            
             # Step 5: Record rollback in recorder if enabled
             if self.enable_recording and self.recorder:
                 try:
@@ -1031,10 +945,10 @@ class ProofController:
             return ""
         if consecutive_errors != self.max_errors + 1:
             return ""
-        if not self.coq.get_goal_str():
+        if not self.backend.get_goal_str():
             return ""
         
-        clean_goal_str = clean_ansi_codes(self.coq.get_goal_str())
+        clean_goal_str = clean_ansi_codes(self.backend.get_goal_str())
         feedback = ""
 
         # Suggest similar tactics
@@ -1043,28 +957,10 @@ class ProofController:
             feedback += "\nHere are some tactics found in history, formatted as '<id>. <tactic> \\n <proof goal diff>':\n\n"
             for i, entry in enumerate(similar_proof_states, 1):
                 tactic = clean_ansi_codes(str(entry.get('tactic', 'Unknown'))).strip()
-                if tactic in ('', '{', '}', 'Unknown'):
+                if tactic in ('', 'Unknown') or not self.backend.include_in_history_feedback(tactic):
                     continue
                 goals_before = clean_ansi_codes(str(entry.get('goals_before', '')))
                 diff_str = goal_diff(clean_goal_str, goals_before)
                 feedback += f"   {i}. {tactic}\n{diff_str[:100]}{'...' if len(diff_str) > 100 else ''}\n"
 
         return feedback
-
-
-    def _try_hammer(self) -> bool:
-        """
-        Try to apply hammer to the current proof state.
-        """
-        success = self._apply_tactic("hammer.")
-        if success:
-            self.logger.info(f"🔧 Hammer applied successfully")
-            return True
-        else:
-            hammer_error = self.coq.get_last_error()
-            if "ATPs failed to find a proof" in hammer_error:
-                self.logger.info(f"🔧 Hammer is not able to find a proof. Continuing...")
-            else:
-                self.logger.warning(f"🔧 Hammer failed with unknown error: {hammer_error}")
-            return False
-        

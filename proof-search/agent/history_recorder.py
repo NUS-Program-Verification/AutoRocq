@@ -5,7 +5,8 @@ from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from utils.logger import setup_logger
-from utils.coq_utils import extract_goal_pattern, count_goals, calculate_similarity, calculate_text_similarity
+from utils.text_utils import calculate_similarity, calculate_text_similarity
+from prover_backends.base import ProverBackend
 
 @dataclass
 class TacticHistoryEntry:
@@ -73,7 +74,9 @@ class TacticHistoryEntry:
 class TacticHistoryManager:
     """Manages successful tactic history for learning."""
     
-    def __init__(self, history_file: str = "tactic_history.json"):
+    def __init__(self, history_file: str = "tactic_history.json", *, backend: ProverBackend):
+        self._goal_pattern = backend.extract_goal_pattern
+        self._count_goals = backend.count_goals
         # Always convert to absolute path to avoid path mismatch issues
         if not os.path.isabs(history_file):
             # Get the project root directory (proof-search)
@@ -395,14 +398,14 @@ class TacticHistoryManager:
             tactic_counts[tactic] = tactic_counts.get(tactic, 0) + 1
             
             # Count patterns
-            pattern = extract_goal_pattern(entry.goals_before)
+            pattern = self._goal_pattern(entry.goals_before)
             pattern_counts[pattern] = pattern_counts.get(pattern, 0) + 1
         
         # Calculate goals solved (difference between before and after goal counts)
         total_goals_solved = 0
         for entry in self.entries:
-            goals_before_count = count_goals(entry.goals_before)
-            goals_after_count = count_goals(entry.goals_after)
+            goals_before_count = self._count_goals(entry.goals_before)
+            goals_after_count = self._count_goals(entry.goals_after)
             goals_solved = max(0, goals_before_count - goals_after_count)
             total_goals_solved += goals_solved
         
@@ -435,7 +438,7 @@ class TacticHistoryManager:
                 return []
             
             # Extract pattern from current proof state
-            current_pattern = extract_goal_pattern(current_proof_state)
+            current_pattern = self._goal_pattern(current_proof_state)
             self.logger.debug(f"🔍 Current pattern: {current_pattern[:100]}...")
             
             # Calculate similarities for all entries
@@ -443,7 +446,7 @@ class TacticHistoryManager:
             for i, entry in enumerate(self.entries):
                 try:
                     # Calculate similarity based on goals_before pattern
-                    entry_pattern = extract_goal_pattern(entry.goals_before)
+                    entry_pattern = self._goal_pattern(entry.goals_before)
                     similarity_score = calculate_similarity(current_pattern, entry_pattern)
                     
                     # Also consider textual similarity for more nuanced matching

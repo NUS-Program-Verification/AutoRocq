@@ -19,7 +19,6 @@ import pandas as pd
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Any
-from coqpyt.coq.proof_file import ProofFile
 from utils.logger import setup_logger
 
 
@@ -76,7 +75,7 @@ class ProofRecorder:
             # Don't clear existing records on error - keep what we have
             pass
 
-    def start_proof_recording(self, proof_file: ProofFile, theorem_name: str = None, metadata: Dict[str, Any] = None,
+    def start_proof_recording(self, proof_file=None, theorem_name: str = None, metadata: Dict[str, Any] = None,
                               proof_file_path: str = None):
         """
         Start recording a new proof attempt.

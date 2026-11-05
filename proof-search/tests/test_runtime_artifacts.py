@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from main import setup_output_directory
-from utils.scratch import ScratchProof
+from prover_backends.rocq.scratch import ScratchProof
 
 
 def test_scratch_restores_coqproject_in_explicit_workspace(tmp_path):

@@ -1,6 +1,21 @@
 import pytest
 
 
+@pytest.fixture
+def history_backend(tmp_path):
+    """History analysis uses backend text methods without starting a prover."""
+    from prover_backends.rocq.backend import RocqBackend
+    from tests.test_utils import create_coq_interface
+
+    source = tmp_path / "history.v"
+    source.write_text("Theorem history : True.\nProof.\nAdmitted.\n")
+    interface = create_coq_interface(source, load=False)
+    try:
+        yield RocqBackend(interface)
+    finally:
+        interface.close()
+
+
 @pytest.fixture(scope="module")
 def coq_factory(request):
     from tests.test_utils import create_coq_interface

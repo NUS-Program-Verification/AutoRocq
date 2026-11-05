@@ -10,15 +10,16 @@ import pytest
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from prover_backends.rocq.backend import RocqBackend
 from agent.context_manager import ContextManager
-from agent.context_search import ContextSearch, ResultReducer, SearchResult
+from agent.context_search import ContextSearch, SearchResult
+from prover_backends.rocq.search import ResultReducer
 from agent.proof_controller import ProofController
-from backend.coq_interface import CoqInterface
 from tests.test_utils import configure_test_library, temp_example_copy, create_coq_interface
 from utils.config import ProofAgentConfig
 from utils.logger import setup_logger
 
-# Work on a throwaway copy: CoqInterface.load() pops the trailing "Admitted."
+# Work on a throwaway copy: RocqInterface.load() pops the trailing "Admitted."
 # and coqpyt writes that change straight back to the file on disk, which would
 # otherwise leave the tracked example without its proof terminator.
 coq_file = temp_example_copy("main_loop_invariant_2_established_Coq.v")
@@ -89,7 +90,7 @@ def load_config():
 def assert_real_result(query, result):
     """Fail on anything that is not a genuine query hit.
 
-    CoqInterface.execute_query() returns None on failure (reason on last_error),
+    RocqInterface.execute_query() returns None on failure (reason on last_error),
     and ContextSearch turns that into content prefixed "Query failed:". Neither
     is a result, and nor is a successful-but-empty "No results found." for the
     queries asserted here.
@@ -109,7 +110,7 @@ def get_interface():
     if _interface is None:
         config = load_config()
         coq = create_coq_interface(coq_file, config=config)
-        print("✅ CoqInterface loaded")
+        print("✅ RocqInterface loaded")
         _interface = coq
     return _interface
 
@@ -129,12 +130,14 @@ def _shared_interface():
 
 
 class FakeCoq:
-    """A CoqInterface double: the query layer."""
+    """A RocqInterface double: the query layer."""
 
     def __init__(self, result, error=None):
         self.result = result
         self.error = error
-        self.proof_file = object()  # non-None, so ContextSearch skips load()
+
+    def is_loaded(self):
+        return True
 
     def execute_query(self, _query):
         return self.result
@@ -162,7 +165,7 @@ class FakeProofState:
 
 def test_failed_command_search_preserves_the_error():
     error = "Error executing Search: lsp endpoint died"
-    result = ContextSearch(FakeCoq(None, error)).search("Search Z.abs.")
+    result = ContextSearch(RocqBackend(FakeCoq(None, error))).search("Search Z.abs.")
 
     assert result.metadata["error"] == error
     assert result.content == f"Query failed: {error}"
@@ -172,7 +175,7 @@ def test_failed_command_search_preserves_the_error():
 def make_context_manager(result):
     manager = object.__new__(ContextManager)
     manager.context_search = FakeSearch(result)
-    manager.coq = FakeProofState()
+    manager.backend = FakeProofState()
     manager.enable_context_search = True
     manager.last_action_info = {}
     manager.logger = setup_logger("test_context_search")
@@ -245,7 +248,7 @@ def make_search_output(size):
 
 def test_coq_setup():
     """The fixture file and every configured library have to actually be there."""
-    print("\n🔧 Checking CoqInterface Setup...")
+    print("\n🔧 Checking RocqInterface Setup...")
 
     assert coq_file.exists(), f"missing fixture: {coq_file}"
     content = coq_file.read_text()
@@ -281,7 +284,7 @@ def test_command_search_returns_real_content():
     """The same, through ContextSearch, with its size bookkeeping checked."""
     print("\n🔬 Testing ContextSearch:")
 
-    coq_search = ContextSearch(get_interface())
+    coq_search = ContextSearch(RocqBackend(get_interface()))
     small_result_limit = ResultReducer().max_small_result
 
     for method_name, argument, goal_context, expected in SEARCH_EXPECTATIONS:
@@ -318,7 +321,7 @@ def test_command_search_returns_real_content():
 
 def test_large_results_are_summarized():
     """A genuinely large search must be cut down, not passed through."""
-    coq_search = ContextSearch(get_interface())
+    coq_search = ContextSearch(RocqBackend(get_interface()))
     result = coq_search.search_pattern("(_ <= _)", "x <= y -> y <= z -> x <= z")
 
     assert_real_result("search_pattern((_ <= _))", result.content)
@@ -340,13 +343,13 @@ def test_a_search_with_no_hits_reports_no_results():
     found." is the whole miss signal. Ranking of real hits is a separate thing
     and lives in ResultReducer._rank_entries.
     """
-    coq_search = ContextSearch(get_interface())
+    coq_search = ContextSearch(RocqBackend(get_interface()))
 
     hit = coq_search.search_lemma("Z.abs", "0 <= Z.abs x")
     assert hit.source == "coq_command"
     assert hit.result_size > 0 and "No results found" not in hit.content
 
-    miss = coq_search.search_lemma("definitely_not_a_lemma_xyz")
+    miss = coq_search.search('Search "definitely_not_a_lemma_xyz".')
     assert "No results found" in miss.content, (
         f"a search with no hits should say so, got {miss.content[:200]!r}"
     )
@@ -358,7 +361,7 @@ def test_goal_context_changes_the_summary():
     # One reducer per call: _structured_summarization mutates result_hit_count,
     # so a shared instance would make this order-dependent.
     def summarize(goal_context):
-        return ContextSearch(get_interface()).search_pattern(
+        return ContextSearch(RocqBackend(get_interface())).search_pattern(
             "(_ <= _)", goal_context
         ).content
 

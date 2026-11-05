@@ -1,4 +1,4 @@
-"""CoqInterface's core surface, against a real coq-lsp session on examples/example.v."""
+"""RocqInterface's core surface, against a real coq-lsp session on examples/example.v."""
 
 import sys
 from pathlib import Path
@@ -6,7 +6,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from coqpyt.coq.structs import TermType
+from prover_backends.rocq.coqpyt.coq.structs import TermType
 
 # example.v's goal reduces on `orb`'s first argument, so `reflexivity.` alone
 # would close it; going through both destruct branches exercises more of
