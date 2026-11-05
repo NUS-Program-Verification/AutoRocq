@@ -6,7 +6,7 @@ import sys
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from backend.coq_interface import CoqInterface  # noqa: E402
+from prover_backends.rocq.session import RocqSession  # noqa: E402
 
 
 class _FakeProofFile:
@@ -42,12 +42,12 @@ class _FakeStep:
 
 
 def _new_coq(proof_steps):
-    coq = object.__new__(CoqInterface)
+    coq = object.__new__(RocqSession)
     coq.proof_file = _FakeProofFile()
     coq.proof = type("FakeProof", (), {"steps": list(proof_steps)})()
     coq.logger = logging.getLogger("test_coq_interface_goal_cache")
-    coq.__dict__["_CoqInterface__goal_cache_key"] = None
-    coq.__dict__["_CoqInterface__cached_goals"] = None
+    coq.__dict__["_RocqSession__goal_cache_key"] = None
+    coq.__dict__["_RocqSession__cached_goals"] = None
     return coq
 
 

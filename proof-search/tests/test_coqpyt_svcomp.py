@@ -1,8 +1,8 @@
 """
 The same SV-COMP proof as test_svcomp.py, but one layer down: straight through
-coqpyt's ProofFile, with no CoqInterface in the way.
+coqpyt's ProofFile, with no RocqSession in the way.
 
-What this pins that the CoqInterface test does not is that the libframac
+What this pins that the RocqSession test does not is that the libframac
 realizations resolve from the workspace's _CoqProject alone -- if they do not,
 `wp_goal` never typechecks and coqpyt fails to open a proof at all.
 """
@@ -15,8 +15,8 @@ import pytest
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from coqpyt.coq.exceptions import InvalidChangeException
-from coqpyt.coq.proof_file import ProofFile
+from prover_backends.rocq.coqpyt.coq.exceptions import InvalidChangeException
+from prover_backends.rocq.coqpyt.coq.proof_file import ProofFile
 from tests.test_utils import configure_test_library, temp_example_copy, create_proof_file
 from utils.config import ProofAgentConfig
 

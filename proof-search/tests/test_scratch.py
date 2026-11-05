@@ -6,7 +6,7 @@ import pytest
 import main as main_module
 from tests.test_utils import create_coq_interface
 from utils.logger import setup_logger
-from utils.scratch import ScratchProof
+from prover_backends.rocq.scratch import ScratchProof
 
 
 def test_save_uses_flat_numeric_suffixes(tmp_path):

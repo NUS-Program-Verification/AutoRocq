@@ -1,4 +1,4 @@
-"""Test CoqInterface.execute_query() results and failure reporting against Rocq."""
+"""Test RocqSession.execute_query() results and failure reporting against Rocq."""
 
 import sys
 from pathlib import Path
@@ -8,7 +8,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 import pytest
 
-from backend.coq_interface import CoqInterface
+from prover_backends.rocq.session import RocqSession
 from tests.test_utils import configure_test_library, temp_example_copy, create_coq_interface
 from utils.config import ProofAgentConfig
 from utils.logger import setup_logger
@@ -63,7 +63,7 @@ def get_interface():
         config = ProofAgentConfig.from_file(str(config_file))
         configure_test_library(config)
         coq = create_coq_interface(coq_file, config=config)
-        print("✅ CoqInterface loaded")
+        print("✅ RocqSession loaded")
         _interface = coq
     return _interface
 
@@ -101,7 +101,7 @@ class FakeAuxFile:
 
 
 def bare_interface():
-    coq = object.__new__(CoqInterface)
+    coq = object.__new__(RocqSession)
     coq.logger = setup_logger("test_coq_interface_queries")
     coq.timeout = 0.01
     coq.last_error = None
@@ -182,9 +182,8 @@ def test_every_query_command_returns_real_content():
 
 
 def test_empty_result_is_a_success_not_a_failure():
-    """A bare `Print Assumptions` genuinely matches nothing -- that is not an error."""
     coq = get_interface()
-    result = coq.execute_query("Print Assumptions")
+    result = coq.execute_query('Search "definitely_not_a_lemma_xyz".')
 
     assert result == "No results found.", f"got {result!r}"
     assert coq.get_last_error() is None, coq.get_last_error()
@@ -217,7 +216,7 @@ TESTS = [
 
 
 if __name__ == "__main__":
-    print("🔬 CoqInterface query command tests")
+    print("🔬 RocqSession query command tests")
     print("=" * 60)
 
     failures = []

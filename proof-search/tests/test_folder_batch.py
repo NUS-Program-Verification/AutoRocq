@@ -13,6 +13,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from tests.test_utils import create_coq_interface
+from prover_backends.rocq.backend import RocqBackend
 from agent.context_manager import ContextManager
 from agent.proof_controller import ProofController
 from utils.config import ProofAgentConfig
@@ -88,7 +89,7 @@ def prove_single_file(
     while crash_count < max_crash_retries:
         coq_interface = None
         try:
-            # CoqInterface proves on a copy, so the benchmark file is never touched.
+            # RocqSession proves on a copy, so the benchmark file is never touched.
             coq_interface = create_coq_interface(coq_file, config=config, load=False)
             
             try:
@@ -101,7 +102,7 @@ def prove_single_file(
                 
                 # Initialize ContextManager
                 context_manager = ContextManager(
-                    coq_interface,
+                    RocqBackend(coq_interface),
                     api_key=config.llm.api_key,
                     enable_history_context=getattr(config, "enable_history_context", True),
                     enable_context_search=getattr(config, "enable_context_search", True),
@@ -109,7 +110,7 @@ def prove_single_file(
                 
                 # Initialize ProofController with updated parameters
                 controller = ProofController(
-                    coq_interface=coq_interface,
+                    backend=RocqBackend(coq_interface),
                     context_manager=context_manager,
                     max_steps=100,  # Reasonable limit for testing
                     enable_error_feedback=getattr(config, "enable_error_feedback", True),

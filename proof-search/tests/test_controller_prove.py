@@ -8,7 +8,8 @@ import pytest
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from backend.coq_interface import CoqInterface
+from prover_backends.rocq.session import RocqSession
+from prover_backends.rocq.backend import RocqBackend
 from agent.context_manager import ContextManager
 from agent.proof_controller import ProofController
 from utils.config import ProofAgentConfig
@@ -60,8 +61,8 @@ def test_prove_theorem():
             pytest.skip("requires an LLM API key")
         print(f"✅ Configuration loaded")
         
-        # Create CoqInterface
-        print("🔧 Step 3: Create CoqInterface")
+        # Create RocqSession
+        print("🔧 Step 3: Create RocqSession")
         coq_interface = create_coq_interface(coq_file, config=config)
         
         try:
@@ -72,7 +73,7 @@ def test_prove_theorem():
             # Create ContextManager
             print("🤖 Step 5: Create ContextManager")
             context_manager = ContextManager(
-                coq_interface,
+                RocqBackend(coq_interface),
                 api_key=config.llm.api_key,
                 enable_history_context=getattr(config, "enable_history_context", True),
                 enable_context_search=False,  # disabled for this simple test
@@ -82,7 +83,7 @@ def test_prove_theorem():
             # Create controller with updated parameters
             print("🎮 Step 6: Create proof controller")
             controller = ProofController(
-                coq_interface=coq_interface,
+                backend=RocqBackend(coq_interface),
                 context_manager=context_manager,
                 max_steps=15,  # Enough steps for our sequence
                 output_dir=str(coq_file.parent),

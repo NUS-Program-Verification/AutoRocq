@@ -8,7 +8,7 @@ Commands:
   tactic <tac>      — apply user-supplied tactic
   hint <text>       — inject natural-language hint into next agent step
   rollback [n]      — undo last n tactics (user or agent, default 1)
-  search <cmd>      — run a Rocq query (e.g. Search Z.add, Print Z.add_comm, Check Z.add)
+  search <cmd>      — run a prover query
   status            — display current proof state
   tree              — display proof tree
   explain           — show agent reasoning trace
@@ -46,7 +46,7 @@ class InteractiveSessionManager:
             return # not available on Windows
 
         self._readline_available = True
-        self._history_file = Path.home() / ".autorocq_history"
+        self._history_file = Path.home() / self.controller.backend.history_filename
 
         if self._history_file.exists():
             try:
@@ -113,7 +113,7 @@ class InteractiveSessionManager:
     def _repl(self):
         while not self._done:
             try:
-                raw = input("autorocq> ").strip()
+                raw = input(self.controller.backend.interactive_prompt).strip()
             except (EOFError, KeyboardInterrupt) as e:
                 self.logger.debug(f"REPL interrupted: {e}")
                 self._do_quit()
@@ -174,7 +174,7 @@ class InteractiveSessionManager:
             self._display_state()
 
     def _do_run(self):
-        goals_before = self.controller.coq.get_goal_str()
+        goals_before = self.controller.backend.get_goal_str()
         while not self._done:
             result = self._advance_one()
             if result is None:
@@ -187,7 +187,7 @@ class InteractiveSessionManager:
                 return
             if result.get('proof_complete'):
                 return
-            current_goals = self.controller.coq.get_goal_str()
+            current_goals = self.controller.backend.get_goal_str()
             if current_goals != goals_before:
                 self._display_state()
                 return
@@ -197,23 +197,22 @@ class InteractiveSessionManager:
             print("Usage: tactic <tactic_string>")
             return
 
-        if not tactic.endswith('.'):
-            tactic += '.'
+        tactic = self.controller.backend.normalize_tactic(tactic)
 
-        subgoals_before = self.controller.coq.get_subgoals()
-        goals_before = self.controller.coq.get_goal_str()
-        hyps_before = self.controller.coq.get_hypothesis()
+        subgoals_before = self.controller.backend.get_goals()
+        goals_before = self.controller.backend.get_goal_str()
+        hyps_before = self.controller.backend.get_hypothesis()
 
         success = self.controller._apply_tactic(tactic)
         if not success:
-            error = self.controller.coq.get_last_error()
+            error = self.controller.get_last_error()
             self.logger.debug(f"User Tactic failed: {tactic!r} — {error}")
             print(f"Tactic failed: {error}")
             return
 
-        goals_after = self.controller.coq.get_goal_str()
-        hyps_after = self.controller.coq.get_hypothesis()
-        subgoals_after = self.controller.coq.get_subgoals()
+        goals_after = self.controller.backend.get_goal_str()
+        hyps_after = self.controller.backend.get_hypothesis()
+        subgoals_after = self.controller.backend.get_goals()
 
         self.controller.global_step_id += 1
         tactic_with_state = self.controller._handle_successful_tactic(
@@ -222,7 +221,7 @@ class InteractiveSessionManager:
             hyps_before or '', hyps_after or ''
         )
         if not tactic_with_state:
-            print(f"Tactic reverted: {self.controller.coq.get_last_error()}")
+            print(f"Tactic reverted: {self.controller.get_last_error()}")
             return
         tactic_with_state['source'] = 'user'
         self.controller._tactics_with_states.append(tactic_with_state)
@@ -231,11 +230,7 @@ class InteractiveSessionManager:
         if not silent:
             print(f"✅ Tactic applied: {tactic}")
 
-        status = self.controller.coq.get_proof_completion_status()
-        if status.get('ready_for_qed') and not status.get('qed_already_applied'):
-            if self.controller.coq.apply_qed():
-                status = self.controller.coq.get_proof_completion_status()
-        if status.get('is_complete') and status.get('qed_already_applied'):
+        if self.controller._finalize_if_ready():
             print("🎉 Proof complete!")
             self.controller.is_successful = True
             self._done = True
@@ -263,16 +258,13 @@ class InteractiveSessionManager:
         remaining = history[:-actual_n]
         target_step_number = remaining[-1]['step_number'] if remaining else 0
 
-        # Pop steps from CoqPyt
-        proof = self.controller.coq.get_unproven_proof()
-        if proof:
-            for _ in range(actual_n):
-                self.controller.coq.proof_file.pop_step(proof)
-        self.controller.coq.proof = self.controller.coq.get_unproven_proof()
+        checkpoint = remaining[-1]['checkpoint'] if remaining else self.controller._initial_checkpoint
+        self.controller.backend.restore(checkpoint)
 
         # Update proof tree
         if self.controller.proof_tree is not None:
             self.controller.proof_tree.delete_subtree_by_step_number(target_step_number)
+            self.controller.proof_tree.reorder_open_subgoals(self.controller.backend.get_goals())
 
         self.controller._tactics_with_states[:] = remaining
 
@@ -282,13 +274,13 @@ class InteractiveSessionManager:
 
     def _do_search(self, cmd: str):
         if not cmd:
-            print("Usage: search <Rocq command>  (e.g. search Search Z.add  |  search Print Z.add_comm)")
+            print(f"Usage: search <command> — {self.controller.backend.query_help}")
             return
         cs = self.controller.context_manager.context_search
         if cs is None:
             print("Context search is disabled in this session.")
             return
-        goal_context = self.controller.coq.get_goal_str() or ""
+        goal_context = self.controller.backend.get_goal_str() or ""
         result = cs.search(cmd, goal_context=goal_context)
         if result and result.content:
             print(result.content)
@@ -305,7 +297,7 @@ class InteractiveSessionManager:
         print("  tactic <tac>      — apply a user-supplied tactic")
         print("  hint <text>       — inject hint into next agent step")
         print("  rollback [n]      — undo last n tactics, user or agent (default 1)")
-        print("  search <cmd>      — run a Rocq query, e.g. 'search Search Z.add' or 'search Print Z.add_comm'")
+        print(f"  search <cmd>      — {self.controller.backend.query_help}")
         print("  status            — display current proof state")
         print("  tree              — display proof tree")
         print("  explain           — show agent reasoning trace")
@@ -325,18 +317,7 @@ class InteractiveSessionManager:
 
     def _extract_and_reset_tactics(self) -> list:
         """Extract and pop pre-existing tactics so _init_proof_session sees a clean state."""
-        coq = self.controller.coq
-        proof = coq.get_unproven_proof()
-        if not proof or len(proof.steps) <= 1:
-            return []
-
-        tactics = [step.text.strip() for step in proof.steps[1:]]
-
-        for _ in range(len(tactics)):
-            coq.proof_file.pop_step(proof)
-
-        coq.proof = coq.get_unproven_proof()
-        return tactics
+        return self.controller.backend.extract_and_reset_tactics()
 
     def _advance_one(self):
         if self._gen is None or self._done:
@@ -351,7 +332,7 @@ class InteractiveSessionManager:
             return {'type': 'done', 'success': self.controller.is_successful}
 
     def _display_state(self):
-        goals = self.controller.coq.get_goal_str() or ""
+        goals = self.controller.backend.display_state()
         print(visualizer.render_state(goals))
 
     def _report(self, result):

@@ -9,7 +9,6 @@ Output from this module is always printed to stdout for usability.
 Internal logging (through utils.logger) and LLM conversation does not go through this module.
 """
 
-import re
 from typing import Any, Dict, List, Optional
 
 try:
@@ -22,63 +21,6 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Public API: structured data (JSON-serializable)
 # ---------------------------------------------------------------------------
-
-def format_goals(goals_str: str, hyps_str: str = "") -> Dict[str, Any]:
-    """
-    Parse a Rocq proof-state string into a structured dict.
-
-    Returns::
-        {
-            "focused_goal":    str,
-            "background_goals": [str, ...],
-            "hypotheses":      [str, ...],
-        }
-    """
-    hypotheses: List[str] = [
-        ln.strip() for ln in (hyps_str or "").splitlines() if ln.strip()
-    ]
-
-    if not (goals_str and goals_str.strip()):
-        return {"focused_goal": "", "background_goals": [], "hypotheses": hypotheses}
-
-    text = goals_str.strip()
-
-    if text.startswith("Goals:"):
-        text = text[6:].strip()
-
-    if "\nBullet:" in text:
-        text = text.split("\nBullet:")[0].strip()
-
-    focused_text, _, bg_raw = text.partition("\nStack:")
-    focused_text = focused_text.strip()
-    background_goals: List[str] = [
-        ln.strip() for ln in bg_raw.splitlines() if ln.strip()
-    ]
-
-    dash_parts = re.split(r"\n-{5,}\n", focused_text)
-    if len(dash_parts) >= 2:
-        goal_section = dash_parts[1].strip()
-        lines = goal_section.splitlines()
-        conclusion_lines: List[str] = []
-        in_conclusion = not any(": " in ln for ln in lines)
-        for ln in lines:
-            stripped = ln.strip()
-            if not stripped:
-                in_conclusion = True
-            elif in_conclusion or ": " not in stripped:
-                conclusion_lines.append(stripped)
-            elif not hypotheses:
-                hypotheses.append(stripped)
-        focused_goal = "\n".join(conclusion_lines).strip() or goal_section
-    else:
-        focused_goal = focused_text
-
-    return {
-        "focused_goal": focused_goal,
-        "background_goals": background_goals,
-        "hypotheses": hypotheses,
-    }
-
 
 def explain(context_manager) -> Dict[str, Any]:
     """
@@ -116,18 +58,8 @@ def render_state(goals_str: str, title: str = "Proof State") -> str:
     """
     Return a formatted, boxed terminal string for the current proof state.
     """
-    body = _clean_goals_str(goals_str)
+    body = goals_str.strip() if goals_str and goals_str.strip() else "No current goals."
     return _rich_box(body, title) if _RICH else _plain_box(body, title)
-
-
-def _clean_goals_str(goals_str: str) -> str:
-    """Strip noise from CoqPyt's get_goal_str() without dropping any content."""
-    if not goals_str or not goals_str.strip():
-        return "No current goals."
-    text = goals_str.strip()
-    # Remove "Bullet: ..." trailers from CoqPyt
-    text = re.sub(r"\nBullet:.*$", "", text, flags=re.MULTILINE).strip()
-    return text or "No current goals."
 
 
 def render_tree(proof_tree, title: str = "Proof Tree") -> str:

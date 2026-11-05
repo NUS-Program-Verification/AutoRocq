@@ -1,7 +1,7 @@
 import json
 from typing import List, Optional, Dict, Any
 from graphviz import Digraph
-from backend.coq_interface import CoqInterface
+from prover_backends.types import Goal
 from utils.logger import setup_logger
 
 class ProofTreeNode:
@@ -74,9 +74,9 @@ class ProofTree:
     def goal_ids(subgoals):
         ids = [getattr(goal, 'goal_id', None) for goal in subgoals]
         if any(goal_id is None for goal_id in ids):
-            raise ValueError("Rocq goal IDs are required for reconciliation")
+            raise ValueError("Prover goal IDs are required for reconciliation")
         if len(set(ids)) != len(ids):
-            raise ValueError("Duplicate Rocq goal IDs")
+            raise ValueError("Duplicate prover goal IDs")
         return ids
 
     def current_goal(self, node):
@@ -85,25 +85,23 @@ class ProofTree:
         )
 
     @staticmethod
-    def format_goal(goal) -> tuple:
+    def get_goal_text(goal) -> tuple:
         """Return one goal's conclusion and local hypotheses."""
-        if hasattr(goal, 'ty'):
-            conclusion = str(goal.ty).strip()
-            hypotheses = CoqInterface.format_hypotheses(goal)
-            return conclusion, hypotheses
+        if isinstance(goal, Goal):
+            return goal.conclusion, goal.hypotheses
         if isinstance(goal, str):
             return goal.strip(), ""
-        return str(goal).strip(), ""
+        raise TypeError("Proof trees require normalized goals")
 
     def reorder_open_subgoals(self, subgoals: list) -> None:
-        """Reorder existing frontier nodes to match a Rocq goal rotation."""
+        """Reorder existing frontier nodes to match a prover goal rotation."""
         ids = self.goal_ids(subgoals)
         nodes = {node.goal_id: node for node in self.open_subgoals}
         if len(nodes) != len(self.open_subgoals) or set(nodes) != set(ids):
-            raise ValueError("Rocq goal IDs do not match the tree frontier")
+            raise ValueError("Prover goal IDs do not match the tree frontier")
         self.open_subgoals = [nodes[goal_id] for goal_id in ids]
         self.live_goals = {
-            goal_id: self.format_goal(goal)
+            goal_id: self.get_goal_text(goal)
             for goal_id, goal in zip(ids, subgoals)
         }
 
@@ -134,7 +132,7 @@ class ProofTree:
 
         if parent is None and subgoals_after:
             new_node.goal_id = self.goal_ids(subgoals_after)[0]
-            conclusion, hypotheses = self.format_goal(subgoals_after[0])
+            conclusion, hypotheses = self.get_goal_text(subgoals_after[0])
             new_node.goals_before = conclusion
             new_node.goals_after = conclusion
             new_node.hypotheses_before = hypotheses
@@ -148,7 +146,7 @@ class ProofTree:
             # Initialize open_subgoals with the root node (NOT a tuple!)
             if subgoals_after:
                 self.open_subgoals = [new_node]
-                self.live_goals = {new_node.goal_id: self.format_goal(subgoals_after[0])}
+                self.live_goals = {new_node.goal_id: self.get_goal_text(subgoals_after[0])}
                 self.logger.info(f"🌳 Initialized open_subgoals with root node")
             
         else:
@@ -199,7 +197,7 @@ class ProofTree:
         # Create child nodes for each new subgoal
         new_subgoal_nodes = []
         for i, subgoal in enumerate(subgoals):
-            goal_conclusion, hyps_str = self.format_goal(subgoal)
+            goal_conclusion, hyps_str = self.get_goal_text(subgoal)
             
             self.logger.debug(f"Subgoal {i+1}/{len(subgoals)}:")
             self.logger.debug(f"  Conclusion: {goal_conclusion[:100]}{'...' if len(goal_conclusion) > 100 else ''}")
@@ -221,7 +219,7 @@ class ProofTree:
             new_subgoal_nodes.append(subgoal_node)
         
         # Replace the focused goal in place. Existing background goals must
-        # stay after its children, in the same order reported by CoqPyt.
+        # stay after its children, in the same order reported by the backend.
         self.open_subgoals[target_index:target_index + 1] = new_subgoal_nodes
         
         for i, node in enumerate(self.open_subgoals):
@@ -249,7 +247,7 @@ class ProofTree:
     ) -> Optional['ProofTreeNode']:
         """
         Attach a tactic node to the correct open subgoal by comparing subgoal lists.
-        Follows Coq's convention: work on subgoals in order (first subgoal first).
+        Works on the first goal in the ordered backend frontier.
         """
         if not self.open_subgoals:
             self.logger.warning("No open subgoals to attach to")
@@ -279,7 +277,7 @@ class ProofTree:
             focused_goal_completed = not replacement_subgoals
             next_goal = None if focused_goal_completed else replacement_subgoals[0]
         next_conclusion, next_hypotheses = (
-            ("", "") if next_goal is None else self.format_goal(next_goal)
+            ("", "") if next_goal is None else self.get_goal_text(next_goal)
         )
 
         # A completed branch has no remaining branch-local goal. The first
@@ -503,49 +501,6 @@ class ProofTree:
         lines = []
         lines.append("\n*************Start Proof Tree*****************\n")
     
-        def extract_focused_goal(goals_text: str) -> str:
-            """
-            Extract only the focused goal (first section before 'Stack:' marker).
-            Removes 'Stack:' section and everything after it.
-            Also removes 'Goals:' prefix and 'Bullet:' suffix.
-            """
-            if not goals_text:
-                return ""
-            
-            # Remove "Goals:" prefix if present
-            text = goals_text.strip()
-            if text.startswith("Goals:"):
-                text = text[6:].strip()
-            
-            # Remove "Bullet: None" or similar at the end
-            if '\nBullet:' in text:
-                text = text.split('\nBullet:')[0].strip()
-            elif 'Bullet:' in text:
-                text = text.split('Bullet:')[0].strip()
-            
-            # Most importantly: Remove "Stack:" and everything after it
-            # This is the key separator between focused goal and background goals
-            if '\nStack:' in text:
-                text = text.split('\nStack:')[0].strip()
-            elif 'Stack:' in text:
-                text = text.split('Stack:')[0].strip()
-            
-            # Now split by the dash separator pattern (look for lines of dashes)
-            # Use regex to find separator lines (10 or more consecutive dashes)
-            import re
-            parts = re.split(r'\n-{10,}\n', text)
-            
-            if len(parts) >= 2:
-                # Take the part between the first and second separator
-                # Format is: [empty/whitespace] --- [goal content] --- [other stuff]
-                # We want the middle part
-                focused_section = parts[1].strip() if len(parts) > 1 else parts[0].strip()
-            else:
-                # No proper separators found, just use the whole text
-                focused_section = text.strip()
-            
-            return focused_section
-    
         def recurse(node, indent=""):
             is_leaf = len(node.children) == 0
             conclusion, hypotheses = self.current_goal(node)
@@ -576,23 +531,10 @@ class ProofTree:
                         lines.append(f"{indent}  Hypotheses:\n{hypotheses}")
                     
                     if goals_text:
-                        focused_goal = extract_focused_goal(goals_text)
-                        
-                        if focused_goal:
-                            lines.append(f"{indent}  Goals:")
-                            lines.append(f"{indent}  ")
-                            #lines.append(f"{indent}  {'-' * 50}")
-                            for line in focused_goal.split('\n'):
-                                lines.append(f"{indent}  {line}")
-                            #lines.append(f"{indent}  {'-' * 50}")
-                        else:
-                            # Debug: extraction failed but we have goals_text
-                            self.logger.warning(f"Could not extract focused goal from node {node.step_number}")
-                            self.logger.warning(f"goals_text length: {len(goals_text)}")
-                            self.logger.warning(f"goals_text preview: {goals_text[:200]}")
-                            # Fallback: show raw goals_text
-                            lines.append(f"{indent}  Goals (raw):")
-                            lines.append(f"{indent}  {goals_text}")
+                        lines.append(f"{indent}  Goals:")
+                        lines.append(f"{indent}  ")
+                        for line in goals_text.split('\n'):
+                            lines.append(f"{indent}  {line}")
                     else:
                         # Debug: no goals_after at all
                         self.logger.warning(f"Node {node.step_number} ('{node.tactic}') has empty goals_after")

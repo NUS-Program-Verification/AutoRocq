@@ -13,9 +13,10 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from tests.test_utils import (
     configure_test_library, create_coq_interface, create_proof_file, temp_example_copy,
 )
-from utils.coq_utils import extract_essential_proof_content
-from coqpyt.lsp.structs import Position, Range
+from prover_backends.rocq.text import extract_essential_proof_content
+from prover_backends.rocq.coqpyt.lsp.structs import Position, Range
 from utils.config import ProofAgentConfig
+from prover_backends.rocq.backend import RocqBackend
 from agent.context_manager import ContextManager
 from utils.logger import setup_logger
 
@@ -37,7 +38,7 @@ def extracted_goal(coq_factory):
     )
     interface = coq_factory(temp_example_copy(GOAL_FILE.name), config=config)
     manager = ContextManager.__new__(ContextManager)
-    manager.coq, manager.logger = interface, logger
+    manager.backend, manager.logger = RocqBackend(interface), logger
     return manager.extract_essential_proof_content(interface.get_proof_file_content())
 
 
@@ -73,7 +74,7 @@ def test_initial_prompt_resolves_parsed_dependencies_without_an_llm(tmp_path):
 
         # Prompt construction needs the loaded proof, not a chat session.
         manager = ContextManager.__new__(ContextManager)
-        manager.coq = interface
+        manager.backend = RocqBackend(interface)
         manager.logger = logger
         manager.proof_plan = None
         prompt = manager.build_initial_prompt("")
@@ -259,7 +260,7 @@ def test_coqpyt_extraction_failure_is_not_hidden(monkeypatch):
     def fail(*args):
         raise LookupError("unresolved declaration")
 
-    monkeypatch.setattr("utils.coq_utils._structured_dependencies", fail)
+    monkeypatch.setattr("prover_backends.rocq.text._structured_dependencies", fail)
     with pytest.raises(RuntimeError, match="unresolved declaration") as error:
         extract_essential_proof_content(
             Mock(), "Theorem t : True.", proof=object(),
@@ -270,8 +271,9 @@ def test_coqpyt_extraction_failure_is_not_hidden(monkeypatch):
 
 def test_initial_prompt_requires_loaded_coqpyt_context():
     manager = ContextManager.__new__(ContextManager)
-    manager.coq = Mock(proof=None, proof_file=None, file_path="/proof.v")
-    manager.coq.get_proof_file_content.return_value = "Theorem t : True."
+    interface = Mock(proof=None, proof_file=None, file_path="/proof.v")
+    manager.backend = RocqBackend(interface)
+    interface.get_proof_file_content.return_value = "Theorem t : True."
     manager.logger = Mock()
     with pytest.raises(ValueError, match="proof, file_context missing"):
         manager.build_initial_prompt("")
@@ -319,7 +321,7 @@ def test_source_ranges_use_utf16_and_reject_invalid_columns(monkeypatch, invalid
     end = len(source.encode("utf-16-le")) // 2 + int(invalid)
     step = SimpleNamespace(ast=SimpleNamespace(range=Range(Position(0, start), Position(0, end))))
     proof = SimpleNamespace(step=step, steps=[])
-    monkeypatch.setattr("utils.coq_utils._structured_dependencies", lambda *args: [])
+    monkeypatch.setattr("prover_backends.rocq.text._structured_dependencies", lambda *args: [])
     inputs = dict(proof=proof, file_context=object(), file_path="/proof.v")
     if invalid:
         with pytest.raises(RuntimeError, match="outside the source line"):

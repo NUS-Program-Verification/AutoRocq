@@ -27,8 +27,8 @@ CORPUS = [
 
 
 @pytest.fixture
-def manager(tmp_path):
-    manager = TacticHistoryManager(str(tmp_path / "tactic_history.json"))
+def manager(tmp_path, history_backend):
+    manager = TacticHistoryManager(str(tmp_path / "tactic_history.json"), backend=history_backend)
     for i, (tactic, goals_before) in enumerate(CORPUS):
         manager.add_successful_tactic(
             tactic=tactic,
@@ -81,8 +81,8 @@ def test_each_result_carries_the_fields_the_prompt_needs(manager):
     assert entry["goals_after"] == "goal after 0"
 
 
-def test_nothing_to_match_against_returns_nothing(manager, tmp_path):
+def test_nothing_to_match_against_returns_nothing(manager, tmp_path, history_backend):
     assert manager.get_similar_history("", n=5) == [], "an empty goal matched something"
 
-    empty = TacticHistoryManager(str(tmp_path / "empty.json"))
+    empty = TacticHistoryManager(str(tmp_path / "empty.json"), backend=history_backend)
     assert empty.get_similar_history("0 <= Z.abs i", n=5) == []

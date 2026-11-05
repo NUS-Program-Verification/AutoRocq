@@ -60,8 +60,10 @@ proof-search/                      # Directory of proof agent src
 │   ├── history_recorder.py        # Manages proof histories
 │   ├── proof_tree.py              # Manages proof tree
 │   └── interactive_session.py     # Interactive REPL loop
-├── backend/                       # Interface with CoqPyt
-├── coqpyt/                        # Interact with Coq
+├── prover_backends/
+│   ├── base.py                    # Generic prover contract
+│   ├── types.py                   # Shared goal and result types
+│   └── rocq/                      # Rocq-specific implementation
 └── utils/                         # Helper functions
 
 scripts/                           # Directory of scripts

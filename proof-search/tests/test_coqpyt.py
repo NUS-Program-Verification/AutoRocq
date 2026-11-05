@@ -8,8 +8,8 @@ import pytest
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from coqpyt.coq.exceptions import InvalidChangeException
-from coqpyt.coq.proof_file import ProofFile
+from prover_backends.rocq.coqpyt.coq.exceptions import InvalidChangeException
+from prover_backends.rocq.coqpyt.coq.proof_file import ProofFile
 from tests.test_utils import temp_example_copy, create_proof_file
 
 # `reflexivity.` alone closes example.v's goal; this route goes through both
@@ -52,7 +52,7 @@ def clean_proof_file(file_path):
 def proof_file():
     """An open ProofFile on a throwaway copy of example.v.
 
-    use_disk_cache is what CoqInterface passes, and it is the difference
+    use_disk_cache is what RocqSession passes, and it is the difference
     between a 4-second session and a 100-second one.
     """
     file_path = temp_example_copy("example.v")

@@ -7,7 +7,7 @@ import pytest
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from backend.coq_interface import CoqInterface
+from prover_backends.rocq.session import RocqSession
 from utils.config import ProofAgentConfig
 from tests.test_utils import (
     create_coq_interface,
@@ -22,7 +22,7 @@ coq_file = temp_example_copy("main_loop_invariant_2_established_Coq.v")
 config_file = PROJECT_ROOT / "configs" / "default_config.json"
 
 def print_current_goals(coq_interface):
-    """Print current goals from the CoqInterface"""
+    """Print current goals from the RocqSession"""
     print("\n🎯 Current Goals:")
     try:
         goals_str = coq_interface.get_goal_str()
@@ -34,7 +34,7 @@ def print_current_goals(coq_interface):
         print(f"(Error getting goals: {e})")
 
 def print_current_hypotheses(coq_interface):
-    """Print current hypotheses from the CoqInterface"""
+    """Print current hypotheses from the RocqSession"""
     print("\n🔍 Current Hypotheses:")
     try:
         hypotheses_str = coq_interface.get_hypothesis()
@@ -58,7 +58,7 @@ def print_current_proof_state(coq_interface):
     print("=" * 50)
 
 def print_steps(coq_interface):
-    """Print proof steps using CoqInterface"""
+    """Print proof steps using RocqSession"""
     print("== Proof Steps ==")
     try:
         if coq_interface.proof and coq_interface.proof.steps:
@@ -96,11 +96,11 @@ def test_proof_with_correct_tactics():
         print(f"✅ Loaded configuration from {config_file}")
         print(f"📚 Library paths configured: {len(config.coq.library_paths)}")
         
-        # Initialize CoqInterface using configuration (agent will auto-create _CoqProject)
+        # Initialize RocqSession using configuration (agent will auto-create _CoqProject)
         coq_interface = create_coq_interface(coq_file, config=config)
         
         try:
-            print("✅ Created CoqInterface with auto-configured libraries")
+            print("✅ Created RocqSession with auto-configured libraries")
             
             print("✅ Cleaned file loaded successfully")
             
@@ -144,7 +144,7 @@ def test_proof_with_correct_tactics():
                 print(f"📝 STEP {i}/{len(tactics)}: {tactic.strip()}")
                 print('='*60)
                 
-                # Apply tactic using CoqInterface API
+                # Apply tactic using RocqSession API
                 success = coq_interface.apply_tactic(tactic)
                 assert success, (
                     f"{tactic.strip()} failed: {coq_interface.get_last_error()}"

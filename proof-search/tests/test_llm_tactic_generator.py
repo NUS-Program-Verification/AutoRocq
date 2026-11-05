@@ -9,6 +9,7 @@ import pytest
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from prover_backends.rocq.backend import RocqBackend
 from agent.context_manager import ContextManager
 from agent.proof_tree import ProofTree
 from utils.config import ProofAgentConfig
@@ -30,9 +31,9 @@ def config():
 
 def test_context_manager_wires_up_its_collaborators(config, coq):
     """Everything the controller reads off a ContextManager has to be there."""
-    cm = ContextManager(coq, api_key=config.llm.api_key)
+    cm = ContextManager(RocqBackend(coq), api_key=config.llm.api_key)
 
-    assert cm.coq is coq
+    assert cm.backend._interface is coq
     assert cm.chat_session is not None
     assert cm.tactic_history is not None
     assert cm.model, "no model resolved"
@@ -47,8 +48,8 @@ def test_context_manager_wires_up_its_collaborators(config, coq):
 
 def test_disabling_context_search_removes_the_query_tool(config, coq):
     """The flag has to reach the tool list the model is offered."""
-    with_search = ContextManager(coq, api_key=config.llm.api_key, enable_context_search=True)
-    without = ContextManager(coq, api_key=config.llm.api_key, enable_context_search=False)
+    with_search = ContextManager(RocqBackend(coq), api_key=config.llm.api_key, enable_context_search=True)
+    without = ContextManager(RocqBackend(coq), api_key=config.llm.api_key, enable_context_search=False)
 
     names = lambda cm: {t["function"]["name"] for t in cm.chat_session.tools}
 
@@ -59,7 +60,7 @@ def test_disabling_context_search_removes_the_query_tool(config, coq):
 
 def test_the_initial_prompt_carries_the_goal_and_the_plan_slot(config, coq):
     """build_initial_prompt is what the model sees first; check its content."""
-    cm = ContextManager(coq, api_key=config.llm.api_key)
+    cm = ContextManager(RocqBackend(coq), api_key=config.llm.api_key)
 
     goals = coq.get_goal_str()
     hypotheses = coq.get_hypothesis()
@@ -84,7 +85,7 @@ def test_the_initial_prompt_carries_the_goal_and_the_plan_slot(config, coq):
 
 
 def test_a_proof_plan_replaces_the_empty_plan_slot(config, coq):
-    cm = ContextManager(coq, api_key=config.llm.api_key, proof_plan="destruct the bool")
+    cm = ContextManager(RocqBackend(coq), api_key=config.llm.api_key, proof_plan="destruct the bool")
 
     prompt = cm.build_initial_prompt("")
 
