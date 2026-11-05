@@ -74,8 +74,8 @@ jobs:
       - name: Restore coqpyt library cache
         uses: actions/cache@v4
         with:
-          path: ~/.cache/coqpyt_cache
-          key: coqpyt-${{ runner.os }}-coq${{ env.COQ_VERSION }}-${{ hashFiles('AutoRocq-bench/libautorocq/**/*.v', 'proof-search/coqpyt/coq/**/*.py', 'proof-search/coqpyt/lsp/**/*.py') }}
+          path: ~/.cache/autorocq_rocq_coqpyt_cache
+          key: autorocq-rocq-coqpyt-${{ runner.os }}-coq${{ env.COQ_VERSION }}-${{ hashFiles('AutoRocq-bench/libautorocq/**/*.v', 'proof-search/prover_backends/rocq/coqpyt/coq/**/*.py', 'proof-search/prover_backends/rocq/coqpyt/lsp/**/*.py') }}
 
       - name: Run proof-search tests
         working-directory: proof-search
@@ -84,5 +84,7 @@ jobs:
         run: python -m pytest tests -v
 
       - name: Run coqpyt tests
-        working-directory: proof-search/coqpyt
+        working-directory: proof-search/prover_backends/rocq/coqpyt
+        env:
+          PYTHONPATH: ${{ github.workspace }}/proof-search
         run: python -m pytest tests -v
